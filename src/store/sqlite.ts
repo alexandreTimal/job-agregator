@@ -247,18 +247,31 @@ export function settingsEmpty(): boolean {
 
 /** Insère une ligne de run et renvoie son id. */
 export function insertRun(run: {
+  startedAt: number;
   durationMs: number | null;
   found: number;
   new: number;
   duplicates: number;
   perSource: Record<string, number>;
 }): number {
+  // `started_at` reflète le DÉBUT réel du run, pas l'instant de l'INSERT (qui a
+  // lieu en fin de run et donnait, via DEFAULT CURRENT_TIMESTAMP, l'heure de fin).
+  // Stocké en UTC au même format texte que CURRENT_TIMESTAMP ("YYYY-MM-DD HH:MM:SS")
+  // pour rester compatible avec strftime/ORDER BY et le parsing UTC côté UI.
+  const startedAtUtc = new Date(run.startedAt).toISOString().slice(0, 19).replace("T", " ");
   const info = getDb()
     .prepare(
-      `INSERT INTO runs (duration_ms, found, new, duplicates, per_source)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO runs (started_at, duration_ms, found, new, duplicates, per_source)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(run.durationMs, run.found, run.new, run.duplicates, JSON.stringify(run.perSource));
+    .run(
+      startedAtUtc,
+      run.durationMs,
+      run.found,
+      run.new,
+      run.duplicates,
+      JSON.stringify(run.perSource),
+    );
   return Number(info.lastInsertRowid);
 }
 

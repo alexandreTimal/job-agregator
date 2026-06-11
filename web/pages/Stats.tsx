@@ -41,11 +41,16 @@ function formatDuree(durationMs: number | null): string {
  * (« 2026-06-11 12:35:08 », sans T ni Z), que certains navigateurs parsent en
  * NaN ou interprètent diversement (UTC vs local). On extrait donc les champs à
  * la main quand le format le permet, avec repli sur `new Date`.
+ *
+ * `started_at` est stocké en UTC (cf. `insertRun`) sans suffixe de fuseau : on
+ * construit la date via `Date.UTC` (et non `new Date(année, mois…)` qui aurait
+ * interprété ces composants comme l'heure LOCALE et perdu le décalage). Le rendu
+ * `toLocaleString` reconvertit ensuite vers le fuseau du navigateur.
  */
 function formatDateHeure(iso: string): string {
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
   const date = m
-    ? new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, m[6] ? +m[6] : 0)
+    ? new Date(Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, m[6] ? +m[6] : 0))
     : new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString("fr-FR", {
@@ -226,8 +231,11 @@ function DerniersRuns({ runs }: { runs: Run[] }) {
   return (
     <div className="flex flex-col gap-2.5">
       {runs.map((run) => {
-        // N'afficher que les sources ayant réellement rapporté des offres.
-        const sources = Object.entries(run.perSource).filter(([, count]) => count > 0);
+        // Toutes les sources interrogées par le run, y compris celles à 0 (une
+        // source peut avoir tourné sans rien rapporter) : on les montre grisées
+        // pour qu'il soit visible qu'elles ont bien été frappées. Tri par volume
+        // décroissant → les 0 en fin de liste.
+        const sources = Object.entries(run.perSource).sort((a, b) => b[1] - a[1]);
         return (
           <div
             key={run.id}
@@ -250,9 +258,16 @@ function DerniersRuns({ runs }: { runs: Run[] }) {
             {sources.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[var(--color-line)] pt-3">
                 {sources.map(([source, count]) => (
-                  <Badge key={source} tone="neutral">
+                  <Badge key={source} tone="neutral" className={cn(count === 0 && "opacity-55")}>
                     <span className="text-[var(--color-ink-faint)]">{source}</span>
-                    <span className="font-[family-name:var(--font-mono)] text-[var(--color-ink-soft)]">
+                    <span
+                      className={cn(
+                        "font-[family-name:var(--font-mono)]",
+                        count > 0
+                          ? "text-[var(--color-ink-soft)]"
+                          : "text-[var(--color-ink-faint)]",
+                      )}
+                    >
                       {count}
                     </span>
                   </Badge>

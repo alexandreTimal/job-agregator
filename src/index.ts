@@ -227,6 +227,7 @@ async function main(): Promise<void> {
 
   if (!dryRun) {
     insertRun({
+      startedAt,
       durationMs,
       found: summary.found,
       new: summary.newCount,
