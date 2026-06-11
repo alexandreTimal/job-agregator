@@ -63,13 +63,21 @@ async function scrapePage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
   url: string,
 ): Promise<ScrapePageResult> {
-  await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+  // `domcontentloaded` (et non `networkidle`) : sur un site JS lourd avec polling
+  // analytics, `networkidle` n'est jamais atteint et le goto timeout à 30 s. On
+  // charge vite puis on attend explicitement le sélecteur de cartes plus bas.
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
-  // Bannière cookies éventuelle
+  // Bannière cookies éventuelle : clic best-effort à TIMEOUT COURT. Le bouton
+  // peut exister dans le DOM sans être cliquable (caché, dans une iframe de
+  // consentement) ; un clic sans timeout bloquerait 30 s et planterait toute la
+  // source. On ne doit jamais laisser le consentement casser le scrape.
   const cookieBtn = await page.$('button:has-text("Accepter"), button:has-text("Tout accepter")');
   if (cookieBtn) {
-    await cookieBtn.click();
-    await page.waitForTimeout(1000);
+    await cookieBtn.click({ timeout: 3000 }).catch(() => {
+      logger.debug("Clic bannière cookies ignoré (bouton non cliquable)");
+    });
+    await page.waitForTimeout(500);
   }
 
   const cardsAppeared = await page
@@ -134,15 +142,19 @@ async function scrapePage(
           null;
 
         if (!publishedRaw) {
-          // Repli : repérer un tag du type « il y a … » / « aujourd'hui » / « hier ».
-          const dateTags = el.querySelectorAll(".tw-tag-contract-s, .tw-tag-secondary-s, time, span");
-          for (const tag of dateTags) {
-            const t = tag.textContent?.trim() ?? "";
-            if (/il y a|aujourd|hier/i.test(t)) {
-              publishedRaw = t;
-              break;
+          // HelloWork n'expose ni <time> ni [data-cy="publicationDate"] : la date
+          // est un simple texte (« il y a 1 heure », « aujourd'hui », « hier »…)
+          // niché dans un élément générique. On scanne tous les descendants et on
+          // retient le texte le PLUS COURT qui matche un motif de date relative,
+          // pour éviter d'attraper celui d'un parent (« Voir l'offre il y a 1 h »).
+          let best: string | null = null;
+          for (const node of el.querySelectorAll("span, div, p, li")) {
+            const t = node.textContent?.trim() ?? "";
+            if (t.length > 0 && t.length <= 30 && /il y a|aujourd|hier/i.test(t)) {
+              if (best === null || t.length < best.length) best = t;
             }
           }
+          publishedRaw = best;
         }
 
         results.push({

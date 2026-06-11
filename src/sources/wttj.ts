@@ -65,7 +65,11 @@ async function scrapePage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
   url: string,
 ): Promise<ScrapePageResult> {
-  await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
+  // `domcontentloaded` (et non `networkidle`) : l'app WTTJ (Algolia) maintient
+  // des requêtes en fond, `networkidle` peut ne jamais être atteint et faire
+  // timeout le goto. On charge vite puis on attend explicitement les cartes,
+  // ce qui laisse le temps de rendu côté client au sélecteur ci-dessous.
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
   const cardsAppeared = await page
     .waitForSelector(CARD_SELECTOR, { timeout: 15_000 })
