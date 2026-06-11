@@ -89,6 +89,23 @@ fois (2e `POST /api/run` → `423`). Chaque run écrit une ligne dans la table `
   **uniquement** de `config/search.config.ts`. Pas de critère codé en dur ailleurs.
 - Un changement de filtrage doit être lisible en `git diff` et couvert par un test.
 
+### Observabilité = diagnostiquer une panne de scraping/parsing en un coup d'œil
+
+- **Logger** (`src/lib/logger.ts`) : niveaux `DEBUG<INFO<WARN<ERROR` (seuil via
+  `LOG_LEVEL`, défaut INFO). Chaque ligne part sur **stderr** (jamais stdout,
+  réservé au protocole SSE `@@RUN `) **et** est persistée dans
+  `data/logs/run-<ts>.log` (un fichier par process, greppable après coup).
+- **Rapport de parsing** (`src/lib/parse-report.ts`) : chaque source construit un
+  `ParseReport`, alimenté via `finalizeOffers(...)`. En fin de run de source il
+  loggue un **bilan** (cartes vues / ignorées + taux de remplissage par champ) et
+  lève un **WARN ciblé** quand un champ est vide à 100 % (= sélecteur cassé) ou
+  qu'une date brute n'a pas été reconnue par `parsePublishedAt` (à étendre dans
+  `src/lib/dates.ts`).
+- **Capture post-mortem** (`src/lib/debug-capture.ts`) : sur 0 carte en page 1,
+  la source fige `data/debug/<source>-zero-cards-<ts>.{html,png}` pour re-dériver
+  le sélecteur sans relancer à la main. Best-effort, jamais bloquant.
+- `data/logs` et `data/debug` vivent sous `data/` → gitignored.
+
 ### Sources
 
 - Chaque source implémente l'interface `ScrapingSource` :

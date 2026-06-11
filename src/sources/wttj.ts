@@ -2,11 +2,14 @@ import type { RawJobOffer } from "../lib/types";
 import type { ScrapingSource, FetchOptions, SearchFilters } from "../lib/source-interface";
 import { launchBrowser } from "../lib/browser";
 import { createLogger } from "../lib/logger";
-import { parsePublishedAt } from "../lib/dates";
+import { ParseReport, finalizeOffers } from "../lib/parse-report";
+import type { RawScrapeResult, PageDiag } from "../lib/parse-report";
+import { captureFailure } from "../lib/debug-capture";
 
 const logger = createLogger("WTTJ");
 const BASE_URL = "https://www.welcometothejungle.com";
 const SEARCH_PATH = "/fr/jobs";
+const CARD_SELECTOR = '[data-role="jobs:thumb"]';
 
 const CONTRACT_MAP: Record<string, string> = {
   cdi: "CDI",
@@ -52,85 +55,95 @@ function buildSearchUrl(page: number, filters?: SearchFilters): string {
   return `${BASE_URL}${SEARCH_PATH}?${params.toString()}`;
 }
 
+/** Résultat brut d'une page + diagnostic (cartes vues / ignorées). */
+interface ScrapePageResult {
+  raws: RawScrapeResult[];
+  diag: PageDiag;
+}
+
 async function scrapePage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
   url: string,
-): Promise<RawJobOffer[]> {
+): Promise<ScrapePageResult> {
   await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 
-  await page.waitForSelector('[data-role="jobs:thumb"]', { timeout: 15_000 }).catch(() => {
-    logger.warn("No job cards found after waiting");
-  });
+  const cardsAppeared = await page
+    .waitForSelector(CARD_SELECTOR, { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
 
-  const offers = await page.evaluate((baseUrl: string) => {
-    const results: {
-      title: string;
-      company: string | null;
-      location: string | null;
-      salary: string | null;
-      contractType: string | null;
-      urlSource: string;
-      publishedRaw: string | null;
-    }[] = [];
+  if (!cardsAppeared) {
+    logger.warn("Sélecteur de cartes absent après attente", { selector: CARD_SELECTOR, url });
+  }
 
-    const cards = document.querySelectorAll('[data-role="jobs:thumb"]');
+  // Le comptage des cartes et des rejets se fait DANS le contexte navigateur,
+  // au plus près du DOM, puis remonte sous forme de diagnostic structuré.
+  const { raws, cardCount, dropped } = await page.evaluate(
+    ({ baseUrl, cardSelector }) => {
+      const results: RawScrapeResult[] = [];
+      const dropped = { noTitle: 0, noHref: 0 };
 
-    for (const card of cards) {
-      const el = card as HTMLElement;
+      const cards = document.querySelectorAll(cardSelector);
 
-      const title = el.querySelector("h2")?.textContent?.trim() ?? "";
-      if (!title) continue;
+      for (const card of cards) {
+        const el = card as HTMLElement;
 
-      const href = el.querySelector("a[href*='/jobs/']")?.getAttribute("href");
-      if (!href) continue;
+        const title = el.querySelector("h2")?.textContent?.trim() ?? "";
+        if (!title) {
+          dropped.noTitle++;
+          continue;
+        }
 
-      const company = el.querySelector('[data-testid^="job-thumb-logo-"]')
-        ?.closest("div")?.parentElement
-        ?.querySelector("span")?.textContent?.trim() ?? null;
+        const href = el.querySelector("a[href*='/jobs/']")?.getAttribute("href");
+        if (!href) {
+          dropped.noHref++;
+          continue;
+        }
 
-      let contractType: string | null = null;
-      let location: string | null = null;
+        const company =
+          el
+            .querySelector('[data-testid^="job-thumb-logo-"]')
+            ?.closest("div")?.parentElement?.querySelector("span")
+            ?.textContent?.trim() ?? null;
 
-      const metaDivs = el.querySelectorAll("svg[alt]");
-      for (const svg of metaDivs) {
-        const alt = svg.getAttribute("alt");
-        const text = svg.closest("div")?.textContent?.trim() ?? "";
-        if (alt === "Contract" && text) contractType = text;
-        if (alt === "Location" && text) location = text;
+        let contractType: string | null = null;
+        let location: string | null = null;
+
+        const metaDivs = el.querySelectorAll("svg[alt]");
+        for (const svg of metaDivs) {
+          const alt = svg.getAttribute("alt");
+          const text = svg.closest("div")?.textContent?.trim() ?? "";
+          if (alt === "Contract" && text) contractType = text;
+          if (alt === "Location" && text) location = text;
+        }
+
+        // Date de publication best-effort : on privilégie l'attribut
+        // `datetime` d'un éventuel <time>, sinon le texte affiché.
+        // NB : un `datetime` présent mais vide ("") est traité comme absent
+        // pour ne pas court-circuiter le repli sur le texte.
+        const timeEl = el.querySelector("time");
+        const publishedRaw =
+          (timeEl?.getAttribute("datetime")?.trim() || null) ??
+          timeEl?.textContent?.trim() ??
+          null;
+
+        results.push({
+          title,
+          company,
+          location,
+          salary: null,
+          contractType,
+          urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
+          publishedRaw,
+        });
       }
 
-      // Date de publication best-effort : on privilégie l'attribut
-      // `datetime` d'un éventuel <time>, sinon le texte affiché.
-      // NB : un `datetime` présent mais vide ("") est traité comme absent
-      // pour ne pas court-circuiter le repli sur le texte.
-      const timeEl = el.querySelector("time");
-      const publishedRaw =
-        (timeEl?.getAttribute("datetime")?.trim() || null) ??
-        timeEl?.textContent?.trim() ??
-        null;
+      return { raws: results, cardCount: cards.length, dropped };
+    },
+    { baseUrl: BASE_URL, cardSelector: CARD_SELECTOR },
+  );
 
-      results.push({
-        title,
-        company,
-        location,
-        salary: null,
-        contractType,
-        urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
-        publishedRaw,
-      });
-    }
-
-    return results;
-  }, BASE_URL);
-
-  return offers.map((o: typeof offers[number]) => {
-    const { publishedRaw, ...rest } = o;
-    return {
-      ...rest,
-      sourceName: "wttj" as const,
-      publishedAt: parsePublishedAt(publishedRaw),
-    };
-  });
+  return { raws, diag: { cardCount, dropped } };
 }
 
 export const wttjSource: ScrapingSource = {
@@ -140,6 +153,7 @@ export const wttjSource: ScrapingSource = {
     const maxPages = options?.maxPages ?? 3;
     const limit = options?.limit;
     const browser = await launchBrowser();
+    const report = new ParseReport("wttj");
 
     try {
       const page = await browser.newPage();
@@ -150,14 +164,29 @@ export const wttjSource: ScrapingSource = {
         const url = buildSearchUrl(p, options?.filters);
         logger.info(`Scraping page ${p}`, { url });
 
-        const pageOffers = await scrapePage(page, url);
+        const { raws, diag } = await scrapePage(page, url);
+        report.addPageDiag(diag);
+        logger.debug(`Page ${p} lue`, { cartes: diag.cardCount, ignorees: diag.dropped });
 
-        if (pageOffers.length === 0) {
-          logger.info(`No offers on page ${p}, stopping pagination`);
+        if (diag.cardCount === 0) {
+          // 0 carte sur la 1re page = anomalie forte (≠ « plus de résultats » en
+          // pagination profonde) : on fige la page pour pouvoir re-dériver le sélecteur.
+          if (p === 1) {
+            const artefacts = await captureFailure(page, "wttj", "zero-cards");
+            logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
+              selector: CARD_SELECTOR,
+              url,
+              capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
+            });
+          } else {
+            logger.info(`Aucune offre page ${p}, arrêt pagination`);
+          }
           break;
         }
 
-        // Deduplicate by URL within this run
+        const pageOffers = finalizeOffers(raws, "wttj", report);
+
+        // Déduplication par URL au sein de ce run.
         for (const offer of pageOffers) {
           if (!seen.has(offer.urlSource)) {
             seen.add(offer.urlSource);
@@ -172,11 +201,15 @@ export const wttjSource: ScrapingSource = {
         }
       }
 
+      report.log(logger);
+
       const result = limit ? allOffers.slice(0, limit) : allOffers;
-      logger.info(`Collected ${allOffers.length} unique offers, returning ${result.length}`);
+      logger.info(`${allOffers.length} offres uniques collectées, ${result.length} renvoyées`);
       return result;
     } catch (error) {
-      logger.error("Source failed", { error: error instanceof Error ? error.message : String(error) });
+      logger.error("Source en échec", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return [];
     } finally {
       await browser.close();

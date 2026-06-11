@@ -2,11 +2,14 @@ import type { RawJobOffer } from "../lib/types";
 import type { ScrapingSource, FetchOptions, SearchFilters } from "../lib/source-interface";
 import { launchBrowser } from "../lib/browser";
 import { createLogger } from "../lib/logger";
-import { parsePublishedAt } from "../lib/dates";
+import { ParseReport, finalizeOffers } from "../lib/parse-report";
+import type { RawScrapeResult, PageDiag } from "../lib/parse-report";
+import { captureFailure } from "../lib/debug-capture";
 
 const logger = createLogger("HELLOWORK");
 const BASE_URL = "https://www.hellowork.com";
 const SEARCH_PATH = "/fr-fr/emploi/recherche.html";
+const CARD_SELECTOR = '[data-cy="serpCard"]';
 
 const CONTRACT_MAP: Record<string, string> = {
   cdi: "CDI",
@@ -50,10 +53,16 @@ function buildSearchUrl(page: number, filters?: SearchFilters): string {
   return `${BASE_URL}${SEARCH_PATH}?${params.toString()}`;
 }
 
+/** Résultat brut d'une page + diagnostic (cartes vues / ignorées). */
+interface ScrapePageResult {
+  raws: RawScrapeResult[];
+  diag: PageDiag;
+}
+
 async function scrapePage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
   url: string,
-): Promise<RawJobOffer[]> {
+): Promise<ScrapePageResult> {
   await page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 
   // Bannière cookies éventuelle
@@ -63,94 +72,96 @@ async function scrapePage(
     await page.waitForTimeout(1000);
   }
 
-  await page.waitForSelector('[data-cy="serpCard"]', { timeout: 15_000 }).catch(() => {
-    logger.warn("No offer cards found after waiting");
-  });
+  const cardsAppeared = await page
+    .waitForSelector(CARD_SELECTOR, { timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
 
-  const offers = await page.evaluate((baseUrl: string) => {
-    const results: {
-      title: string;
-      company: string | null;
-      location: string | null;
-      salary: string | null;
-      contractType: string | null;
-      urlSource: string;
-      publishedRaw: string | null;
-    }[] = [];
+  if (!cardsAppeared) {
+    logger.warn("Sélecteur de cartes absent après attente", { selector: CARD_SELECTOR, url });
+  }
 
-    const cards = document.querySelectorAll('[data-cy="serpCard"]');
+  const { raws, cardCount, dropped } = await page.evaluate(
+    ({ baseUrl, cardSelector }) => {
+      const results: RawScrapeResult[] = [];
+      const dropped = { noTitle: 0, noHref: 0 };
 
-    for (const card of cards) {
-      const el = card as HTMLElement;
+      const cards = document.querySelectorAll(cardSelector);
 
-      const titleEl = el.querySelector('[data-cy="offerTitle"] h3 p:first-child');
-      const title = titleEl?.textContent?.trim() ?? "";
-      if (!title) continue;
+      for (const card of cards) {
+        const el = card as HTMLElement;
 
-      const companyEl = el.querySelector('[data-cy="offerTitle"] h3 p:nth-child(2)');
-      const company = companyEl?.textContent?.trim() ?? null;
-
-      const href = el.querySelector('[data-cy="offerTitle"]')?.getAttribute("href");
-      if (!href) continue;
-
-      const location = el.querySelector('[data-cy="localisationCard"]')?.textContent?.trim() ?? null;
-      const contractType = el.querySelector('[data-cy="contractCard"]')?.textContent?.trim() ?? null;
-
-      let salary: string | null = null;
-      const tags = el.querySelectorAll(".tw-tag-secondary-s");
-      for (const tag of tags) {
-        const text = tag.textContent?.trim() ?? "";
-        if (text.includes("€")) {
-          salary = text;
-          break;
+        const titleEl = el.querySelector('[data-cy="offerTitle"] h3 p:first-child');
+        const title = titleEl?.textContent?.trim() ?? "";
+        if (!title) {
+          dropped.noTitle++;
+          continue;
         }
-      }
 
-      // Date de publication best-effort : attribut `datetime` d'un <time>
-      // si présent, sinon le texte d'un éventuel libellé de date relative.
-      // NB : un `datetime` présent mais vide ("") est traité comme absent
-      // pour ne pas court-circuiter le repli sur [data-cy=publicationDate].
-      const timeEl = el.querySelector("time");
-      let publishedRaw: string | null =
-        (timeEl?.getAttribute("datetime")?.trim() || null) ??
-        timeEl?.textContent?.trim() ??
-        el.querySelector('[data-cy="publicationDate"]')?.textContent?.trim() ??
-        null;
+        const href = el.querySelector('[data-cy="offerTitle"]')?.getAttribute("href");
+        if (!href) {
+          dropped.noHref++;
+          continue;
+        }
 
-      if (!publishedRaw) {
-        // Repli : repérer un tag du type « il y a … » / « aujourd'hui » / « hier ».
-        const dateTags = el.querySelectorAll(".tw-tag-contract-s, .tw-tag-secondary-s, time, span");
-        for (const tag of dateTags) {
-          const t = tag.textContent?.trim() ?? "";
-          if (/il y a|aujourd|hier/i.test(t)) {
-            publishedRaw = t;
+        const companyEl = el.querySelector('[data-cy="offerTitle"] h3 p:nth-child(2)');
+        const company = companyEl?.textContent?.trim() ?? null;
+
+        const location =
+          el.querySelector('[data-cy="localisationCard"]')?.textContent?.trim() ?? null;
+        const contractType =
+          el.querySelector('[data-cy="contractCard"]')?.textContent?.trim() ?? null;
+
+        let salary: string | null = null;
+        const tags = el.querySelectorAll(".tw-tag-secondary-s");
+        for (const tag of tags) {
+          const text = tag.textContent?.trim() ?? "";
+          if (text.includes("€")) {
+            salary = text;
             break;
           }
         }
+
+        // Date de publication best-effort : attribut `datetime` d'un <time>
+        // si présent, sinon le texte d'un éventuel libellé de date relative.
+        // NB : un `datetime` présent mais vide ("") est traité comme absent
+        // pour ne pas court-circuiter le repli sur [data-cy=publicationDate].
+        const timeEl = el.querySelector("time");
+        let publishedRaw: string | null =
+          (timeEl?.getAttribute("datetime")?.trim() || null) ??
+          timeEl?.textContent?.trim() ??
+          el.querySelector('[data-cy="publicationDate"]')?.textContent?.trim() ??
+          null;
+
+        if (!publishedRaw) {
+          // Repli : repérer un tag du type « il y a … » / « aujourd'hui » / « hier ».
+          const dateTags = el.querySelectorAll(".tw-tag-contract-s, .tw-tag-secondary-s, time, span");
+          for (const tag of dateTags) {
+            const t = tag.textContent?.trim() ?? "";
+            if (/il y a|aujourd|hier/i.test(t)) {
+              publishedRaw = t;
+              break;
+            }
+          }
+        }
+
+        results.push({
+          title,
+          company: company || null,
+          location: location || null,
+          salary: salary || null,
+          contractType: contractType || null,
+          urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
+          publishedRaw,
+        });
       }
 
-      results.push({
-        title,
-        company: company || null,
-        location: location || null,
-        salary: salary || null,
-        contractType: contractType || null,
-        urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
-        publishedRaw,
-      });
-    }
+      return { raws: results, cardCount: cards.length, dropped };
+    },
+    { baseUrl: BASE_URL, cardSelector: CARD_SELECTOR },
+  );
 
-    return results;
-  }, BASE_URL);
-
-  return offers.map((o: typeof offers[number]) => {
-    const { publishedRaw, ...rest } = o;
-    return {
-      ...rest,
-      sourceName: "hellowork" as const,
-      publishedAt: parsePublishedAt(publishedRaw),
-    };
-  });
+  return { raws, diag: { cardCount, dropped } };
 }
 
 export const helloworkSource: ScrapingSource = {
@@ -160,6 +171,7 @@ export const helloworkSource: ScrapingSource = {
     const maxPages = options?.maxPages ?? 3;
     const limit = options?.limit;
     const browser = await launchBrowser();
+    const report = new ParseReport("hellowork");
 
     try {
       const page = await browser.newPage();
@@ -169,13 +181,26 @@ export const helloworkSource: ScrapingSource = {
         const url = buildSearchUrl(p, options?.filters);
         logger.info(`Scraping page ${p}`, { url });
 
-        const pageOffers = await scrapePage(page, url);
+        const { raws, diag } = await scrapePage(page, url);
+        report.addPageDiag(diag);
+        logger.debug(`Page ${p} lue`, { cartes: diag.cardCount, ignorees: diag.dropped });
 
-        if (pageOffers.length === 0) {
-          logger.info(`No offers on page ${p}, stopping pagination`);
+        if (diag.cardCount === 0) {
+          // 0 carte sur la 1re page = anomalie forte : on fige la page pour debug.
+          if (p === 1) {
+            const artefacts = await captureFailure(page, "hellowork", "zero-cards");
+            logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
+              selector: CARD_SELECTOR,
+              url,
+              capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
+            });
+          } else {
+            logger.info(`Aucune offre page ${p}, arrêt pagination`);
+          }
           break;
         }
 
+        const pageOffers = finalizeOffers(raws, "hellowork", report);
         allOffers.push(...pageOffers);
 
         if (limit && allOffers.length >= limit) break;
@@ -185,11 +210,15 @@ export const helloworkSource: ScrapingSource = {
         }
       }
 
+      report.log(logger);
+
       const result = limit ? allOffers.slice(0, limit) : allOffers;
-      logger.info(`Collected ${allOffers.length} offers, returning ${result.length}`);
+      logger.info(`${allOffers.length} offres collectées, ${result.length} renvoyées`);
       return result;
     } catch (error) {
-      logger.error("Source failed", { error: error instanceof Error ? error.message : String(error) });
+      logger.error("Source en échec", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return [];
     } finally {
       await browser.close();

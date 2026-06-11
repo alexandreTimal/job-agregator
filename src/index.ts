@@ -21,7 +21,7 @@ import { computeHash, normalizeText } from "./lib/normalize";
 import { passesFilters, scoreOffer } from "./filter";
 import { initDb, offerExists, insertOffer, insertRun, closeDb } from "./store/sqlite";
 import { getSettings } from "./settings";
-import { createLogger } from "./lib/logger";
+import { createLogger, logFilePath } from "./lib/logger";
 import type { RunEvent } from "./shared/types";
 import type { ScoredOffer } from "./lib/types";
 
@@ -67,6 +67,7 @@ async function main(): Promise<void> {
     sources: activeSources.map((s) => s.name),
     contractTypes: settings.contractTypes,
     dryRun,
+    journal: logFilePath(),
   });
 
   const candidates = new Map<string, ScoredOffer>();
