@@ -43,6 +43,7 @@ const CONTRACT_TYPES = [
 const KNOWN_SOURCES: { name: string; label: string; ats?: boolean }[] = [
   { name: "wttj", label: "Welcome to the Jungle" },
   { name: "hellowork", label: "HelloWork" },
+  { name: "linkedin", label: "LinkedIn" },
   { name: "greenhouse", label: "Greenhouse (pages carrières)", ats: true },
   { name: "lever", label: "Lever (pages carrières)", ats: true },
 ];
