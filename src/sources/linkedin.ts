@@ -222,7 +222,8 @@ export const linkedinSource: ScrapingSource = {
       const allOffers: RawJobOffer[] = [];
       const seen = new Set<string>();
 
-      termsLoop: for (const term of terms) {
+      termsLoop: for (const [i, term] of terms.entries()) {
+        options?.onProgress?.({ term, termIndex: i + 1, totalTerms: terms.length });
         let start = 0;
 
         for (let p = 1; p <= maxPages; p++) {

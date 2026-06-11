@@ -21,6 +21,12 @@ export interface FetchOptions {
   boards?: string[];
   /** Signal d'annulation : à l'abort, la source libère ses ressources (ferme son navigateur). */
   signal?: AbortSignal;
+  /**
+   * Rappel de progression intra-source (best-effort, purement informatif).
+   * Les sources web l'appellent au début de chaque terme pour que l'UI bouge
+   * pendant qu'un seul navigateur boucle tous les termes. `termIndex` est 1-based.
+   */
+  onProgress?: (info: { term?: string; termIndex?: number; totalTerms?: number }) => void;
 }
 
 export interface ScrapingSource {

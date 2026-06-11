@@ -224,7 +224,8 @@ export const helloworkSource: ScrapingSource = {
       const allOffers: RawJobOffer[] = [];
       const seen = new Set<string>();
 
-      termsLoop: for (const term of terms) {
+      termsLoop: for (const [i, term] of terms.entries()) {
+        options?.onProgress?.({ term, termIndex: i + 1, totalTerms: terms.length });
         const filters: SearchFilters = { ...options?.filters, keyword: term };
 
         for (let p = 1; p <= maxPages; p++) {

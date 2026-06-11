@@ -23,6 +23,7 @@ import { useEffect, useRef, useState } from "react";
 import { Radar, Loader2, TriangleAlert, Ban } from "lucide-react";
 import type { RunEvent } from "../../../src/shared/types";
 import { apiClient } from "../../lib/api-client";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 interface RunButtonProps {
@@ -51,6 +52,8 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
   const [survol, setSurvol] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
+  /** Compteur global d'avancement : sources terminées / total (phase `start`/`source-done`). */
+  const [progression, setProgression] = useState<{ done: number; total: number } | null>(null);
   /** Fonction de fermeture du flux SSE courant, le cas échéant. */
   const fermerStreamRef = useRef<(() => void) | null>(null);
   /** Minuterie du chien de garde de silence SSE. */
@@ -102,17 +105,47 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
     reactiverChienDeGarde();
 
     if (event.type === "progress") {
-      const morceaux = [
-        event.term ? `terme « ${event.term} »` : null,
-        event.source ? `source ${event.source}` : null,
-        typeof event.found === "number" ? `${event.found} offre(s)` : null,
-      ].filter(Boolean);
-      setMessage(morceaux.length > 0 ? morceaux.join(" — ") : "recherche en cours…");
-      return;
+      // Compteur global mis à jour quand l'event le porte (start / source-done).
+      if (typeof event.totalSources === "number") {
+        setProgression({ done: event.sourcesDone ?? 0, total: event.totalSources });
+      }
+
+      switch (event.phase) {
+        case "start":
+          setMessage(
+            `Lancement — ${event.totalSources ?? 0} source(s), ${event.totalTerms ?? 0} terme(s)`,
+          );
+          return;
+        case "source-start":
+          setMessage(`${event.source ?? "source"} — démarrage…`);
+          return;
+        case "source-progress": {
+          const pos =
+            typeof event.termIndex === "number" && typeof event.totalTerms === "number"
+              ? ` (${event.termIndex}/${event.totalTerms})`
+              : "";
+          setMessage(`${event.source ?? "source"} — terme « ${event.term ?? "…"} »${pos}`);
+          return;
+        }
+        case "source-done":
+          setMessage(`${event.source ?? "source"} : ${event.found ?? 0} offre(s)`);
+          return;
+        default: {
+          // Repli (event `progress` sans `phase` : compat ascendante).
+          const morceaux = [
+            event.term ? `terme « ${event.term} »` : null,
+            event.source ? `source ${event.source}` : null,
+            typeof event.found === "number" ? `${event.found} offre(s)` : null,
+          ].filter(Boolean);
+          setMessage(morceaux.length > 0 ? morceaux.join(" — ") : "recherche en cours…");
+          return;
+        }
+      }
     }
 
     if (event.type === "done") {
       setMessage(event.message ?? "Recherche terminée.");
+      setProgression(null);
       setEnCours(false);
       arreterStream();
       onRunFinished();
@@ -122,6 +155,7 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
     // type === "error"
     setErreur(event.message ?? "La recherche a échoué.");
     setMessage(null);
+    setProgression(null);
     setEnCours(false);
     arreterStream();
     onRunFinished();
@@ -130,6 +164,7 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
   async function lancer() {
     if (enCours) return;
     setErreur(null);
+    setProgression(null);
     setMessage("Démarrage…");
     setEnCours(true);
 
@@ -160,6 +195,9 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
   async function annuler() {
     if (!enCours) return;
     setErreur(null);
+    // Le compteur de progression n'a plus de sens pendant l'annulation : on le
+    // retire pour ne pas laisser un badge `k/N` périmé à côté de « Annulation… ».
+    setProgression(null);
     setMessage("Annulation…");
 
     let annule: boolean;
@@ -267,7 +305,12 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
               role="status"
             >
               <span className="size-1.5 shrink-0 rounded-full bg-[var(--color-signal)] [animation:pulse-dot_1.6s_ease-in-out_infinite]" />
-              {message}
+              {progression && progression.total > 0 && (
+                <Badge tone="mono" className="shrink-0 tabular-nums">
+                  {progression.done}/{progression.total}
+                </Badge>
+              )}
+              <span className="truncate">{message}</span>
             </p>
           )}
           {erreur && (

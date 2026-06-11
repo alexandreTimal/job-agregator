@@ -90,16 +90,32 @@ export interface Stats {
 /**
  * Événement SSE émis sur GET /api/run/stream pendant un run.
  *
- * - `type: 'progress'` : avancement (term/source/found renseignés best-effort).
+ * - `type: 'progress'` : avancement (champs ci-dessous renseignés best-effort).
  * - `type: 'done'`     : run terminé proprement (`newOffers`/`found` renseignés).
  * - `type: 'error'`    : run échoué (message renseigné).
+ *
+ * Sur un `progress`, `phase` distingue les sous-étapes (tous champs optionnels,
+ * compat ascendante du contrat SSE) :
+ * - `start`          : lancement du run (`totalSources`, `totalTerms`).
+ * - `source-start`   : une source démarre son fetch (`source`).
+ * - `source-progress`: une source web avance sur ses termes
+ *                      (`source`, `term`, `termIndex`, `totalTerms`).
+ * - `source-done`    : une source a fini (`source`, `found`, `sourcesDone`,
+ *                      `totalSources`).
  */
 export interface RunEvent {
   type: "progress" | "done" | "error";
+  phase?: "start" | "source-start" | "source-progress" | "source-done";
   term?: string;
   source?: string;
   found?: number;
   /** Nombre d'offres NOUVELLES retenues, renseigné sur l'événement `done`. */
   newOffers?: number;
+  /** Compteur global : sources terminées / total (phases `start`/`source-done`). */
+  sourcesDone?: number;
+  totalSources?: number;
+  /** Avancement intra-source : index du terme en cours (1-based) / total. */
+  termIndex?: number;
+  totalTerms?: number;
   message?: string;
 }

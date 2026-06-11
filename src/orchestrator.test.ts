@@ -17,7 +17,7 @@ import { join } from "node:path";
 
 import type { RawJobOffer } from "./lib/types";
 import type { ScrapingSource, FetchOptions } from "./lib/source-interface";
-import type { Settings } from "./shared/types";
+import type { Settings, RunEvent } from "./shared/types";
 import type { SearchConfig } from "../config/search.config";
 
 const tmpDir = mkdtempSync(join(tmpdir(), "job-agregator-test-"));
@@ -167,7 +167,7 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
     maxOfferAgeDays: 7,
   };
 
-  const events: unknown[] = [];
+  const events: RunEvent[] = [];
   const summary = await runPipeline(
     sources,
     settings,
@@ -204,6 +204,29 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
 
   // --- 4) Best-effort : le run se résout malgré la source qui throw -------
   //   (assuré par le fait qu'on atteint ces assertions sans exception)
+
+  // --- Progression : flux d'événements destiné à l'UI --------------------
+  const progressEvents = events.filter((e) => e.type === "progress");
+  const startEvents = progressEvents.filter((e) => e.phase === "start");
+  assert.equal(startEvents.length, 1, "un seul événement de lancement");
+  const start = startEvents[0];
+  assert.ok(start, "un événement de lancement émis");
+  assert.equal(start.totalSources, 6, "start annonce le nombre de sources");
+  assert.equal(start.totalTerms, 1, "start annonce le nombre de termes");
+
+  const doneEvents = progressEvents.filter((e) => e.phase === "source-done");
+  assert.equal(doneEvents.length, 6, "un source-done par source (y compris celle en échec)");
+  assert.equal(
+    Math.max(...doneEvents.map((e) => e.sourcesDone ?? 0)),
+    6,
+    "le compteur de progression atteint N/N",
+  );
+  const boomDone = doneEvents.find((e) => e.source === "boom");
+  assert.equal(
+    boomDone?.found,
+    0,
+    "la source en échec émet quand même son source-done (best-effort)",
+  );
 
   // --- 5) Persistance : lecture de la base temp --------------------------
   const offers = listOffers("all", "recent");

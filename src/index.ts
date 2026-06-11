@@ -86,11 +86,27 @@ export async function runPipeline(
   const baseFilters = buildBaseFilters(settings.contractTypes);
   const limit = pLimit(SOURCE_CONCURRENCY);
 
+  // Compteur d'avancement : sources terminées / total. Incrément sûr (JS
+  // mono-thread : aucun entrelacement réel sur `sourcesDone++`).
+  const totalSources = activeSources.length;
+  let sourcesDone = 0;
+
+  // Lancement : annonce le volume de travail dès le clic (avant tout fetch),
+  // pour que l'UI montre immédiatement de l'activité plutôt qu'un statut figé.
+  emitEvent({
+    type: "progress",
+    phase: "start",
+    totalSources,
+    totalTerms: settings.terms.length,
+  });
+
   // Une tâche par source : la source boucle elle-même sur tous les termes.
   const tasks = activeSources.map((source) =>
     limit(async () => {
       const boards = settings.atsBoards?.[source.name] ?? [];
       const controller = new AbortController();
+      // Démarrage de la source : visible dès qu'un slot pLimit se libère.
+      emitEvent({ type: "progress", phase: "source-start", source: source.name });
       let offers: Awaited<ReturnType<typeof source.fetch>> = [];
       try {
         offers = await withTimeout(
@@ -100,6 +116,11 @@ export async function runPipeline(
             boards,
             maxPages: config.maxPagesPerSource ?? 3,
             signal: controller.signal,
+            // Progression intra-source : relayée telle quelle vers l'UI. Permet
+            // de bouger pendant qu'une source web boucle ses termes en silence.
+            // `...info` d'abord : `phase`/`source` autoritatifs ne peuvent être écrasés.
+            onProgress: (info) =>
+              emitEvent({ type: "progress", ...info, phase: "source-progress", source: source.name }),
           }),
           SOURCE_TIMEOUT_MS,
         );
@@ -115,7 +136,17 @@ export async function runPipeline(
         offers = [];
       }
       perSource[source.name] = offers.length;
-      emitEvent({ type: "progress", source: source.name, found: offers.length });
+      // Fin de source : fait avancer le compteur global (même en échec :
+      // best-effort, le run atteint toujours N/N puis `done`).
+      sourcesDone++;
+      emitEvent({
+        type: "progress",
+        phase: "source-done",
+        source: source.name,
+        found: offers.length,
+        sourcesDone,
+        totalSources,
+      });
       return offers;
     }),
   );

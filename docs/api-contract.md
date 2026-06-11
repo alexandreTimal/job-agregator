@@ -154,12 +154,26 @@ Flux Server-Sent Events de progression du run en cours. Chaque message `data:`
 est un `RunEvent` sérialisé en JSON.
 
 ```
-data: {"type":"progress","term":"data engineer","source":"wttj","found":12}
+data: {"type":"progress","phase":"start","totalSources":8,"totalTerms":5}
+
+data: {"type":"progress","phase":"source-start","source":"linkedin"}
+
+data: {"type":"progress","phase":"source-progress","source":"linkedin","term":"data engineer","termIndex":2,"totalTerms":5}
+
+data: {"type":"progress","phase":"source-done","source":"linkedin","found":12,"sourcesDone":3,"totalSources":8}
 
 data: {"type":"done","message":"run terminé","newOffers":6}
 ```
 
-- `type: "progress"` : avancement (`term` / `source` / `found` best-effort).
+- `type: "progress"` : avancement. `phase` (optionnel) distingue les sous-étapes —
+  tous les champs sont optionnels (compat ascendante) :
+  - `"start"`          : lancement du run (`totalSources`, `totalTerms`).
+  - `"source-start"`   : une source démarre son fetch (`source`).
+  - `"source-progress"`: une source web avance sur ses termes (`source`, `term`,
+    `termIndex` 1-based, `totalTerms`).
+  - `"source-done"`    : une source a fini (`source`, `found`, `sourcesDone`,
+    `totalSources` → compteur global d'avancement).
+  - Absence de `phase` : format historique (`term` / `source` / `found` best-effort).
 - `type: "done"`     : run terminé proprement. `newOffers` (optionnel) porte le
   nombre de nouvelles offres du run, utilisé par la notification bureau du cron.
 - `type: "error"`    : run échoué (`message` renseigné).
