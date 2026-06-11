@@ -8,9 +8,10 @@
  * et l'UI écrit via `setSettings()`.
  *
  * Seuls les champs pilotés par l'UI vivent ici : `terms`, `contractTypes`
- * (valeurs possibles "stage" et "CDI"), `enabledSources`, `atsBoards` et
+ * (valeurs possibles "stage" et "CDI"), `enabledSources`, `atsBoards`,
+ * `salaryMin`, `locations` (villes) + `remoteOk` (télétravail), et
  * `maxOfferAgeDays` (ancienneté max de mise en ligne, 0 = sans limite). Les autres
- * critères de filtrage (exclude, salaryMin, locations…) restent dans search.config.ts.
+ * critères de filtrage (exclude, defaultRadiusKm…) restent dans search.config.ts.
  */
 import type { Settings } from "./shared/types";
 import { getSettingsRaw, setSettingRaw, settingsEmpty } from "./store/sqlite";
@@ -21,6 +22,9 @@ const KEY_TERMS = "terms";
 const KEY_CONTRACT_TYPES = "contractTypes";
 const KEY_ENABLED_SOURCES = "enabledSources";
 const KEY_ATS_BOARDS = "atsBoards";
+const KEY_SALARY_MIN = "salaryMin";
+const KEY_LOCATIONS = "locations";
+const KEY_REMOTE_OK = "remoteOk";
 const KEY_MAX_OFFER_AGE_DAYS = "maxOfferAgeDays";
 const KEY_CRON_ENABLED = "cronEnabled";
 const KEY_CRON_TIMES = "cronTimes";
@@ -69,11 +73,19 @@ function parseRecord(raw: string | undefined): Record<string, string[]> {
 
 /** Valeurs de seed initial dérivées de la config statique + du registry. */
 function seedValues(): Settings {
+  // `config.locations` mélange villes et le mot magique "remote" : on le scinde
+  // pour le modèle piloté par l'UI (liste de villes + interrupteur `remoteOk`).
+  const rawLocations = config.locations ?? [];
+  const cities = rawLocations.filter((l) => l.trim().toLowerCase() !== "remote");
+  const remoteOk = rawLocations.some((l) => l.trim().toLowerCase() === "remote");
   return {
     terms: config.terms,
     contractTypes: config.contractTypes ?? ["CDI"],
     enabledSources: sources.map((s) => s.name),
     atsBoards: {},
+    salaryMin: config.salaryMin ?? 0,
+    locations: cities,
+    remoteOk,
     maxOfferAgeDays: config.maxOfferAgeDays ?? DEFAULT_MAX_OFFER_AGE_DAYS,
     cronEnabled: false,
     cronTimes: [...DEFAULT_CRON_TIMES],
@@ -96,6 +108,10 @@ export function getSettings(): Settings {
     contractTypes: parseList(raw[KEY_CONTRACT_TYPES], seed.contractTypes),
     enabledSources: parseList(raw[KEY_ENABLED_SOURCES], seed.enabledSources),
     atsBoards: parseRecord(raw[KEY_ATS_BOARDS]),
+    salaryMin: parseNonNegativeInt(raw[KEY_SALARY_MIN], seed.salaryMin),
+    locations: parseList(raw[KEY_LOCATIONS], seed.locations),
+    // Booléen absent → on retombe sur le seed (≠ cronEnabled qui défaut à false).
+    remoteOk: raw[KEY_REMOTE_OK] === undefined ? seed.remoteOk : raw[KEY_REMOTE_OK] === "true",
     maxOfferAgeDays: parseNonNegativeInt(raw[KEY_MAX_OFFER_AGE_DAYS], seed.maxOfferAgeDays),
     cronEnabled: raw[KEY_CRON_ENABLED] === "true",
     cronTimes: parseList(raw[KEY_CRON_TIMES], seed.cronTimes),
@@ -108,6 +124,9 @@ export function setSettings(settings: Settings): void {
   setSettingRaw(KEY_CONTRACT_TYPES, JSON.stringify(settings.contractTypes));
   setSettingRaw(KEY_ENABLED_SOURCES, JSON.stringify(settings.enabledSources));
   setSettingRaw(KEY_ATS_BOARDS, JSON.stringify(settings.atsBoards));
+  setSettingRaw(KEY_SALARY_MIN, String(settings.salaryMin));
+  setSettingRaw(KEY_LOCATIONS, JSON.stringify(settings.locations));
+  setSettingRaw(KEY_REMOTE_OK, String(settings.remoteOk));
   setSettingRaw(KEY_MAX_OFFER_AGE_DAYS, String(settings.maxOfferAgeDays));
   setSettingRaw(KEY_CRON_ENABLED, String(settings.cronEnabled));
   setSettingRaw(KEY_CRON_TIMES, JSON.stringify(settings.cronTimes));

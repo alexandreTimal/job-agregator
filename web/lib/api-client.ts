@@ -68,6 +68,9 @@ const MOCK_SETTINGS: Settings = {
   contractTypes: ["CDI"],
   enabledSources: ["wttj", "hellowork"],
   atsBoards: { greenhouse: ["stripe"], lever: ["swile"] },
+  salaryMin: 45000,
+  locations: ["Paris", "Lyon"],
+  remoteOk: true,
   maxOfferAgeDays: 7,
   cronEnabled: false,
   cronTimes: ["08:00", "20:00"],
@@ -148,6 +151,16 @@ export const apiClient = {
     if (res.status === 423) return false;
     if (!res.ok) throw new Error(`HTTP ${res.status} sur /api/run`);
     return true;
+  },
+
+  /**
+   * Indique si un run est en cours côté serveur. Utilisé au montage du
+   * RunButton (après un changement de page) pour décider de se reconnecter au
+   * flux SSE et reprendre le suivi.
+   */
+  async getRunStatus(): Promise<{ running: boolean }> {
+    if (USE_MOCK) return Promise.resolve({ running: false });
+    return http<{ running: boolean }>(`/api/run/status`);
   },
 
   /**

@@ -45,6 +45,13 @@ export type OfferSort = "recent" | "score";
  * - `enabledSources`: noms des sources actives (cf. registry des sources).
  * - `atsBoards`     : pour chaque source ATS (greenhouse, lever), la liste des
  *                     tokens d'entreprise à interroger. Ex. `{ greenhouse: ["stripe"] }`.
+ * - `salaryMin`     : salaire annuel minimum en € (entier ≥ 0 ; 0 = sans minimum).
+ *                     Une offre sans salaire (ou non parsable) passe (lenient).
+ * - `locations`     : villes acceptées (sans "remote", géré par `remoteOk`). Pilote
+ *                     AUSSI la recherche : chaque ville = une recherche distincte sur
+ *                     les sources qui filtrent par lieu (hellowork, linkedin). Liste
+ *                     vide = aucune contrainte de ville. Une offre sans lieu passe (lenient).
+ * - `remoteOk`      : accepte les offres en télétravail (en plus des `locations`).
  * - `maxOfferAgeDays`: ancienneté max de mise en ligne en jours (entier ≥ 0 ;
  *                     0 = sans limite). Une offre sans `publishedAt` passe (lenient).
  * - `cronEnabled`   : active la planification automatique des runs (scheduler serveur).
@@ -55,6 +62,9 @@ export interface Settings {
   contractTypes: string[];
   enabledSources: string[];
   atsBoards: Record<string, string[]>;
+  salaryMin: number;
+  locations: string[];
+  remoteOk: boolean;
   maxOfferAgeDays: number;
   cronEnabled: boolean;
   cronTimes: string[];

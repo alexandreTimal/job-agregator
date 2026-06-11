@@ -53,6 +53,16 @@ function parseSettingsBody(body: unknown): Settings | null {
   // contractTypes : uniquement "stage" et "CDI".
   if (!candidate.contractTypes.every((t) => CONTRACT_TYPES.has(t))) return null;
 
+  // salaryMin : entier ≥ 0 (0 = sans minimum).
+  const salaryMin = candidate.salaryMin;
+  if (typeof salaryMin !== "number" || !Number.isInteger(salaryMin) || salaryMin < 0) {
+    return null;
+  }
+
+  // locations : tableau de villes ; remoteOk : booléen (télétravail accepté).
+  if (!isStringArray(candidate.locations)) return null;
+  if (typeof candidate.remoteOk !== "boolean") return null;
+
   // maxOfferAgeDays : entier ≥ 0 (0 = sans limite).
   const maxOfferAgeDays = candidate.maxOfferAgeDays;
   if (
@@ -85,6 +95,9 @@ function parseSettingsBody(body: unknown): Settings | null {
     contractTypes: clean(candidate.contractTypes),
     enabledSources: clean(candidate.enabledSources),
     atsBoards,
+    salaryMin,
+    locations: clean(candidate.locations),
+    remoteOk: candidate.remoteOk,
     maxOfferAgeDays,
     cronEnabled: candidate.cronEnabled,
     cronTimes: clean(candidate.cronTimes),

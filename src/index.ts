@@ -39,9 +39,16 @@ function emit(event: RunEvent): void {
   process.stdout.write(`@@RUN ${JSON.stringify(event)}\n`);
 }
 
-/** Filtres communs à toutes les sources web (le keyword est injecté par terme). */
-function buildBaseFilters(contractTypes: string[]): SearchFilters {
-  const cityLocations = (config.locations ?? [])
+/**
+ * Filtres communs à toutes les sources web (le keyword est injecté par terme).
+ * `locations` = villes pilotées par l'UI ; chaque ville devient une recherche
+ * distincte côté source (cf. `locationSlots`) puisqu'aucun jobboard n'accepte
+ * plusieurs villes en une requête. Le rayon reste un défaut statique global
+ * (`defaultRadiusKm`). Le « remote » n'entre PAS dans la recherche (géré en
+ * post-filtre) : on filtre défensivement le mot magique s'il traîne.
+ */
+function buildBaseFilters(contractTypes: string[], locations: string[]): SearchFilters {
+  const cityLocations = locations
     .filter((l) => normalizeText(l) !== "remote")
     .map((label) => ({ label, radius: config.defaultRadiusKm ?? null }));
 
@@ -83,7 +90,7 @@ export async function runPipeline(
   let newCount = 0;
   let duplicates = 0;
 
-  const baseFilters = buildBaseFilters(settings.contractTypes);
+  const baseFilters = buildBaseFilters(settings.contractTypes, settings.locations);
   const limit = pLimit(SOURCE_CONCURRENCY);
 
   // Compteur d'avancement : sources terminées / total. Incrément sûr (JS
@@ -199,11 +206,15 @@ async function main(): Promise<void> {
   const settings = getSettings();
   const activeSources = getEnabledSources(settings.enabledSources);
 
-  // Critères de filtrage : config statique + contractTypes pilotés par l'UI.
+  // Critères de filtrage : config statique (exclude…) + champs pilotés par l'UI.
+  // `locations` du filtre pur = villes + le mot magique "remote" (si `remoteOk`),
+  // pour garder `filter.ts` inchangé (il connaît déjà ce token).
   const effectiveConfig: SearchConfig = {
     ...config,
     terms: settings.terms,
     contractTypes: settings.contractTypes,
+    salaryMin: settings.salaryMin,
+    locations: [...settings.locations, ...(settings.remoteOk ? ["remote"] : [])],
     maxOfferAgeDays: settings.maxOfferAgeDays,
   };
 
@@ -211,6 +222,9 @@ async function main(): Promise<void> {
     terms: settings.terms,
     sources: activeSources.map((s) => s.name),
     contractTypes: settings.contractTypes,
+    salaryMin: settings.salaryMin,
+    locations: settings.locations,
+    remoteOk: settings.remoteOk,
     dryRun,
     journal: logFilePath(),
   });

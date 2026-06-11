@@ -64,6 +64,9 @@ const baseSettings: Settings = {
   contractTypes: ["CDI"],
   enabledSources: [],
   atsBoards: {},
+  salaryMin: 0,
+  locations: [],
+  remoteOk: false,
   maxOfferAgeDays: 0,
   // Champs cron (requis par le type `Settings`) : neutres pour ce test d'orchestration.
   cronEnabled: false,
@@ -107,10 +110,15 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
   // 2+3) Deux sources web renvoyant la MÊME offre logique (title/company/location)
   //      → même hash → doit être dédupliquée entre sources.
   const dupOffer = { title: "Data engineer Dup", company: "DupCo", location: "Paris" };
-  const webA = mockSource("weba", {
-    kind: "web",
-    offers: [makeOffer({ ...dupOffer, urlSource: "https://a/dup" })],
-  });
+  const webACaptured: { options?: FetchOptions } = {};
+  const webA = mockSource(
+    "weba",
+    {
+      kind: "web",
+      offers: [makeOffer({ ...dupOffer, urlSource: "https://a/dup" })],
+    },
+    webACaptured,
+  );
   const webB = mockSource("webb", {
     kind: "web",
     offers: [
@@ -157,6 +165,9 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
     ...baseSettings,
     enabledSources: sources.map((s) => s.name),
     atsBoards: { fakeats: ["acme"] },
+    // Deux villes → l'orchestrateur doit les router toutes vers les sources web
+    // (chacune émettra une recherche par ville ; cf. locationSlots).
+    locations: ["Paris", "Lyon"],
   };
 
   // Config de filtre : exclut "stagiaire" (PAS un contractType sélectionné → bien rejeté)
@@ -179,6 +190,15 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
   // --- 1) Routage atsBoards ---------------------------------------------
   assert.deepEqual(atsCaptured.options?.boards, ["acme"], "la source ATS reçoit ses boards");
   assert.deepEqual(atsCaptured.options?.terms, ["data engineer"], "la source ATS reçoit les terms");
+
+  // --- 2) Routage multi-lieu vers les sources web ------------------------
+  // Les deux villes pilotées par l'UI sont transmises à la source web (qui
+  // émettra une recherche par ville en interne via locationSlots).
+  assert.deepEqual(
+    webACaptured.options?.filters?.locations?.map((l) => l.label),
+    ["Paris", "Lyon"],
+    "la source web reçoit toutes les villes configurées",
+  );
 
   // --- 3) Compteurs ------------------------------------------------------
   // found = somme des offres brutes :

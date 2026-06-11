@@ -65,6 +65,9 @@ Réponse `200` : `Settings`
   "contractTypes": ["CDI"],
   "enabledSources": ["wttj", "hellowork"],
   "atsBoards": { "greenhouse": ["stripe"], "lever": ["swile"] },
+  "salaryMin": 45000,
+  "locations": ["Paris", "Lyon"],
+  "remoteOk": true,
   "maxOfferAgeDays": 7,
   "cronEnabled": false,
   "cronTimes": ["08:00", "20:00"]
@@ -73,6 +76,15 @@ Réponse `200` : `Settings`
 
 - `atsBoards` : Record de tokens d'entreprise par source ATS (`greenhouse`,
   `lever`). Optionnel en PUT (absent → `{}` par défaut).
+- `salaryMin` : salaire annuel minimum en €. Entier ≥ 0 ; `0` = sans minimum.
+  Une offre sans salaire (ou non parsable) est conservée (filtre lenient).
+- `locations` : villes acceptées (sans `"remote"`, géré par `remoteOk`). Pilote
+  AUSSI la recherche : chaque ville déclenche une requête distincte sur les
+  sources qui filtrent par lieu (hellowork, linkedin), aucune n'acceptant
+  plusieurs villes à la fois. Liste vide = aucune contrainte de ville. Une offre
+  sans lieu est conservée (filtre lenient).
+- `remoteOk` : booléen. Quand vrai, les offres en télétravail sont acceptées en
+  plus des `locations` (post-filtre ; n'ajoute pas de requête de recherche).
 - `maxOfferAgeDays` : ancienneté max de mise en ligne, en jours. Entier ≥ 0 ;
   `0` = sans limite (défaut `7`). Une offre sans date de publication est conservée
   (filtre lenient).
@@ -90,6 +102,10 @@ Remplace la configuration effective.
 
 - Corps : `Settings` (même forme que la réponse de GET /api/settings).
 - `contractTypes` : valeurs possibles `"stage"` et `"CDI"`.
+- `salaryMin` : entier ≥ 0 obligatoire (`0` = sans minimum). Un nombre non entier
+  ou négatif rend le corps invalide.
+- `locations` : tableau de chaînes obligatoire (peut être vide) ; `remoteOk` :
+  booléen obligatoire.
 - `maxOfferAgeDays` : entier ≥ 0 obligatoire (`0` = sans limite). Un nombre
   non entier ou négatif rend le corps invalide.
 - `cronEnabled` : booléen obligatoire.
@@ -133,6 +149,15 @@ mémoire serveur : un seul run à la fois.
 - Réponse `202` : `{ "ok": true }` — run démarré.
 - Réponse `423` (Locked) : `{ "ok": false, "error": "run already in progress" }`
   — un run est déjà en cours.
+
+### GET /api/run/status
+
+État du verrou de run en mémoire serveur. Permet à l'UI de savoir, après un
+changement de page (le `RunButton` est démonté/remonté), s'il faut se reconnecter
+au flux SSE pour reprendre le suivi d'un run toujours en cours.
+
+- Corps : aucun.
+- Réponse `200` : `{ "running": boolean }` — `true` si un run est en cours.
 
 ### POST /api/run/cancel
 

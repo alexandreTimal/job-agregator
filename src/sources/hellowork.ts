@@ -1,5 +1,6 @@
 import type { RawJobOffer } from "../lib/types";
 import type { ScrapingSource, FetchOptions, SearchFilters } from "../lib/source-interface";
+import { locationSlots } from "./location-slots";
 import { launchBrowser } from "../lib/browser";
 import { createLogger } from "../lib/logger";
 import { ParseReport, finalizeOffers } from "../lib/parse-report";
@@ -224,48 +225,64 @@ export const helloworkSource: ScrapingSource = {
       const allOffers: RawJobOffer[] = [];
       const seen = new Set<string>();
 
-      termsLoop: for (const [i, term] of terms.entries()) {
-        options?.onProgress?.({ term, termIndex: i + 1, totalTerms: terms.length });
-        const filters: SearchFilters = { ...options?.filters, keyword: term };
+      // HelloWork n'accepte qu'UNE ville par requête → une recherche par ville
+      // (cf. locationSlots), chacune bouclée sur tous les termes. Un seul
+      // navigateur : un même hôte n'est jamais frappé en parallèle. La dédup par
+      // URL (`seen`) absorbe les offres communes à plusieurs villes.
+      const slots = locationSlots(options?.filters);
+      const totalSteps = slots.length * terms.length;
+      let step = 0;
 
-        for (let p = 1; p <= maxPages; p++) {
-          const url = buildSearchUrl(p, filters);
-          logger.info(`Scraping page ${p}`, { term, url });
+      searchLoop: for (const slot of slots) {
+        const lieu = slot?.label ?? "—";
+        for (const term of terms) {
+          step++;
+          options?.onProgress?.({ term, termIndex: step, totalTerms: totalSteps });
+          const filters: SearchFilters = {
+            ...options?.filters,
+            keyword: term,
+            locations: slot ? [slot] : undefined,
+          };
 
-          const { raws, diag } = await scrapePage(page, url);
-          report.addPageDiag(diag);
-          logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
+          for (let p = 1; p <= maxPages; p++) {
+            const url = buildSearchUrl(p, filters);
+            logger.info(`Scraping page ${p}`, { term, lieu, url });
 
-          if (diag.cardCount === 0) {
-            // 0 carte sur la 1re page = anomalie forte : on fige la page pour debug.
-            if (p === 1) {
-              const artefacts = await captureFailure(page, "hellowork", "zero-cards");
-              logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
-                selector: CARD_SELECTOR,
-                term,
-                url,
-                capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
-              });
-            } else {
-              logger.info(`Aucune offre page ${p}, arrêt pagination`, { term });
+            const { raws, diag } = await scrapePage(page, url);
+            report.addPageDiag(diag);
+            logger.debug(`Page ${p} lue`, { term, lieu, cartes: diag.cardCount, ignorees: diag.dropped });
+
+            if (diag.cardCount === 0) {
+              // 0 carte sur la 1re page = anomalie forte : on fige la page pour debug.
+              if (p === 1) {
+                const artefacts = await captureFailure(page, "hellowork", "zero-cards");
+                logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
+                  selector: CARD_SELECTOR,
+                  term,
+                  lieu,
+                  url,
+                  capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
+                });
+              } else {
+                logger.info(`Aucune offre page ${p}, arrêt pagination`, { term, lieu });
+              }
+              break; // boucle de pages seulement → (lieu, terme) suivant
             }
-            break; // boucle de pages seulement → terme suivant
+
+            const pageOffers = finalizeOffers(raws, "hellowork", report);
+            for (const offer of pageOffers) {
+              if (!seen.has(offer.urlSource)) {
+                seen.add(offer.urlSource);
+                allOffers.push(offer);
+              }
+            }
+
+            if (limit && allOffers.length >= limit) break searchLoop;
+            if (p < maxPages) await page.waitForTimeout(1500);
           }
 
-          const pageOffers = finalizeOffers(raws, "hellowork", report);
-          for (const offer of pageOffers) {
-            if (!seen.has(offer.urlSource)) {
-              seen.add(offer.urlSource);
-              allOffers.push(offer);
-            }
-          }
-
-          if (limit && allOffers.length >= limit) break termsLoop;
-          if (p < maxPages) await page.waitForTimeout(1500);
+          await page.waitForTimeout(1500); // délai poli entre deux recherches
         }
-
-        if (limit && allOffers.length >= limit) break;
-        await page.waitForTimeout(1500); // délai poli entre deux termes
       }
 
       report.log(logger);

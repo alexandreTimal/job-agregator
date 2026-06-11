@@ -4,6 +4,8 @@
  * Pilote la table sqlite `settings` via le client API typé :
  *   - `terms[]`          : termes de recherche (ajout / suppression).
  *   - `contractTypes`    : interrupteurs parmi "stage" et "CDI".
+ *   - `salaryMin`        : salaire annuel minimum (0 = sans minimum).
+ *   - `locations[]`      : villes acceptées (+ `remoteOk` pour le télétravail).
  *   - `enabledSources[]` : interrupteurs par jobboard connu.
  *
  * Chargement via GET /api/settings, sauvegarde via PUT /api/settings.
@@ -19,6 +21,8 @@ import {
   Check,
   Save,
   CalendarClock,
+  Banknote,
+  MapPin,
 } from "lucide-react";
 import type { Settings } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
@@ -128,10 +132,16 @@ export default function Settings() {
   const [boardDrafts, setBoardDrafts] = useState<Record<string, string>>({});
   /** Brouillon string du champ ancienneté (autorise un champ vide pendant l'édition). */
   const [ageDraft, setAgeDraft] = useState("");
+  /** Brouillon string du champ salaire minimum (autorise un champ vide pendant l'édition). */
+  const [salaryDraft, setSalaryDraft] = useState("");
+  /** Saisie en cours du champ « Ajouter une ville ». */
+  const [newLocation, setNewLocation] = useState("");
   /** Vrai dès qu'une modification non sauvegardée existe (évite un message trompeur au 1er chargement). */
   const [dirty, setDirty] = useState(false);
   /** Pour rendre le focus au champ d'ajout après suppression d'un chip de terme. */
   const addInputRef = useRef<HTMLInputElement>(null);
+  /** Idem pour le champ d'ajout de ville. */
+  const addLocationRef = useRef<HTMLInputElement>(null);
 
   /* Chargement initial de la configuration effective. */
   useEffect(() => {
@@ -142,6 +152,7 @@ export default function Settings() {
         if (!cancelled) {
           setSettings({ ...s, terms: dedupeTerms(s.terms), atsBoards: s.atsBoards ?? {} });
           setAgeDraft(String(s.maxOfferAgeDays));
+          setSalaryDraft(String(s.salaryMin));
         }
       })
       .catch((err: unknown) => {
@@ -231,6 +242,42 @@ export default function Settings() {
     const n = raw.trim() === "" ? 0 : Number(raw);
     const next = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
     patch({ ...settings, maxOfferAgeDays: next });
+  }
+
+  /** Salaire minimum annuel. Brouillon string distinct (cf. `onAgeChange`) ;
+   *  vide/invalide/≤ 0 → 0 = sans minimum, sinon entier d'euros. */
+  function onSalaryChange(raw: string): void {
+    setSalaryDraft(raw);
+    if (!settings) return;
+    const n = raw.trim() === "" ? 0 : Number(raw);
+    const next = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    patch({ ...settings, salaryMin: next });
+  }
+
+  function addLocation(): void {
+    if (!settings) return;
+    const trimmed = newLocation.trim();
+    if (!trimmed) return;
+    // « remote » est réservé à l'interrupteur Télétravail : on ne l'ajoute pas en ville.
+    if (trimmed.toLowerCase() === "remote") {
+      setNewLocation("");
+      return;
+    }
+    const exists = settings.locations.some((l) => l.toLowerCase() === trimmed.toLowerCase());
+    patch({ ...settings, locations: exists ? settings.locations : [...settings.locations, trimmed] });
+    setNewLocation("");
+  }
+
+  function removeLocation(index: number): void {
+    if (!settings) return;
+    patch({ ...settings, locations: settings.locations.filter((_, i) => i !== index) });
+    // Cf. removeTerm : on ne perd pas le focus sur <body> quand le chip disparaît.
+    addLocationRef.current?.focus();
+  }
+
+  function toggleRemote(): void {
+    if (!settings) return;
+    patch({ ...settings, remoteOk: !settings.remoteOk });
   }
 
   function toggleSource(name: string): void {
@@ -383,6 +430,102 @@ export default function Settings() {
               />
             );
           })}
+        </div>
+      </Card>
+
+      {/* --- Salaire minimum ------------------------------------------ */}
+      <Card className="animate-rise p-6">
+        <SectionTitle
+          id="settings-salary-heading"
+          icon={<Banknote />}
+          title="Salaire minimum"
+          hint="Salaire annuel brut minimum pour qu'une offre soit retenue."
+        />
+        <div
+          role="group"
+          aria-labelledby="settings-salary-heading"
+          className="flex items-center gap-3"
+        >
+          <Input
+            type="number"
+            min={0}
+            step={1000}
+            inputMode="numeric"
+            aria-label="Salaire annuel minimum, en euros"
+            value={salaryDraft}
+            onChange={(e) => onSalaryChange(e.target.value)}
+            className="w-32 font-[family-name:var(--font-mono)]"
+          />
+          <span className="text-sm text-[var(--color-ink-soft)]">€ / an</span>
+        </div>
+        <p className="mt-3 text-[0.8rem] text-[var(--color-ink-mute)]">
+          0 = aucun minimum. Une offre dont le salaire n'est pas affiché est toujours conservée.
+        </p>
+      </Card>
+
+      {/* --- Localisation --------------------------------------------- */}
+      <Card className="animate-rise p-6">
+        <SectionTitle
+          id="settings-locations-heading"
+          icon={<MapPin />}
+          title="Localisation"
+          hint="Chaque ville déclenche une recherche distincte sur les sources qui filtrent par lieu. Le télétravail s'active à part."
+        />
+
+        {settings.locations.length === 0 ? (
+          <p className="mb-4 text-sm italic text-[var(--color-ink-mute)]">
+            Aucune ville : la recherche n'est pas restreinte géographiquement.
+          </p>
+        ) : (
+          <ul className="mb-4 flex flex-wrap gap-2">
+            {settings.locations.map((city, index) => (
+              <li
+                key={`${index}-${city}`}
+                className="group inline-flex items-center gap-2 rounded-full border border-[var(--color-line-strong)] bg-black/25 py-1.5 pl-3.5 pr-1.5 text-sm text-[var(--color-ink-soft)] transition-colors hover:border-[var(--color-signal)]/40"
+              >
+                <span className="font-[family-name:var(--font-mono)] text-[0.8rem]">{city}</span>
+                <button
+                  type="button"
+                  aria-label={`Supprimer la ville « ${city} »`}
+                  onClick={() => removeLocation(index)}
+                  className="grid size-6 place-items-center rounded-full text-[var(--color-ink-mute)] transition-colors hover:bg-[var(--color-danger)]/15 hover:text-[var(--color-danger)]"
+                >
+                  <X aria-hidden="true" className="size-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            addLocation();
+          }}
+        >
+          <Input
+            ref={addLocationRef}
+            type="text"
+            aria-label="Nouvelle ville"
+            value={newLocation}
+            placeholder="ex. Paris"
+            onChange={(e) => setNewLocation(e.target.value)}
+            className="flex-1"
+          />
+          <Button type="submit" variant="signal" disabled={!newLocation.trim()}>
+            <Plus aria-hidden="true" className="size-4" />
+            Ajouter
+          </Button>
+        </form>
+
+        <div className="mt-4">
+          <ToggleRow
+            active={settings.remoteOk}
+            onToggle={toggleRemote}
+            title="Télétravail accepté"
+            hint="Inclut les offres 100 % remote, en plus des villes."
+          />
         </div>
       </Card>
 

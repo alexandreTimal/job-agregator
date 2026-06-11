@@ -1,5 +1,6 @@
 import type { RawJobOffer } from "../lib/types";
 import type { ScrapingSource, FetchOptions } from "../lib/source-interface";
+import { locationSlots } from "./location-slots";
 import { launchBrowser } from "../lib/browser";
 import { createLogger } from "../lib/logger";
 import { ParseReport, finalizeOffers } from "../lib/parse-report";
@@ -199,9 +200,6 @@ export const linkedinSource: ScrapingSource = {
         : [];
     if (terms.length === 0) return [];
 
-    // Une seule ville (comme WTTJ) ; le reste du filtrage est en aval.
-    const location = options?.filters?.locations?.[0]?.label ?? "";
-
     const browser = await launchBrowser();
     // Abort de l'orchestrateur (timeout/échec) : on ferme le navigateur sans
     // attendre la résolution de la promesse de fetch (les opérations Playwright
@@ -222,71 +220,85 @@ export const linkedinSource: ScrapingSource = {
       const allOffers: RawJobOffer[] = [];
       const seen = new Set<string>();
 
-      termsLoop: for (const [i, term] of terms.entries()) {
-        options?.onProgress?.({ term, termIndex: i + 1, totalTerms: terms.length });
-        let start = 0;
+      // LinkedIn n'accepte qu'UNE ville par requête → une recherche par ville
+      // (cf. locationSlots), chacune bouclée sur tous les termes. Un seul
+      // navigateur ; la dédup par URL (`seen`) absorbe les offres communes à
+      // plusieurs villes.
+      const slots = locationSlots(options?.filters);
+      const totalSteps = slots.length * terms.length;
+      let step = 0;
 
-        for (let p = 1; p <= maxPages; p++) {
-          const url = buildGuestSearchUrl(term, location, start);
-          logger.info(`Scraping page ${p}`, { term, url });
+      searchLoop: for (const slot of slots) {
+        const location = slot?.label ?? "";
+        const lieu = location || "—";
+        for (const term of terms) {
+          step++;
+          options?.onProgress?.({ term, termIndex: step, totalTerms: totalSteps });
+          let start = 0;
 
-          const { raws, diag, status, bodyTextLength } = await scrapePage(page, url);
-          report.addPageDiag(diag);
-          logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
+          for (let p = 1; p <= maxPages; p++) {
+            const url = buildGuestSearchUrl(term, location, start);
+            logger.info(`Scraping page ${p}`, { term, lieu, url });
 
-          if (diag.cardCount === 0) {
-            const verdict = classifyZeroCards({ status, bodyTextLength });
-            if (verdict === "empty") {
-              // Body vide en succès HTTP : recherche sans résultat (ou fin de pagination). Normal.
-              logger.info("Aucun résultat pour ce terme (réponse vide en succès HTTP)", {
-                term,
-                url,
-                status,
-              });
-            } else {
-              // blocked (non-2xx / pas de réponse) OU selector (page pleine, 0 carte = sélecteur cassé).
-              // Capture seulement en page 1 pour ne pas spammer data/debug à chaque page.
-              const shouldCapture = p === 1;
-              const artefacts = shouldCapture ? await captureFailure(page, "linkedin", "zero-cards") : null;
-              logger.warn(
-                verdict === "blocked"
-                  ? "0 carte — blocage probable (rate-limit ou réponse non-2xx)"
-                  : "0 carte malgré une page non vide — sélecteur probablement cassé",
-                {
-                  verdict,
-                  selector: CARD_SELECTOR,
+            const { raws, diag, status, bodyTextLength } = await scrapePage(page, url);
+            report.addPageDiag(diag);
+            logger.debug(`Page ${p} lue`, { term, lieu, cartes: diag.cardCount, ignorees: diag.dropped });
+
+            if (diag.cardCount === 0) {
+              const verdict = classifyZeroCards({ status, bodyTextLength });
+              if (verdict === "empty") {
+                // Body vide en succès HTTP : recherche sans résultat (ou fin de pagination). Normal.
+                logger.info("Aucun résultat pour ce terme (réponse vide en succès HTTP)", {
                   term,
+                  lieu,
                   url,
                   status,
-                  capture: artefacts
-                    ? `${artefacts}.html / .png`
-                    : shouldCapture
-                      ? "échec capture"
-                      : "non capturé (page>1)",
-                },
-              );
+                });
+              } else {
+                // blocked (non-2xx / pas de réponse) OU selector (page pleine, 0 carte = sélecteur cassé).
+                // Capture seulement en page 1 pour ne pas spammer data/debug à chaque page.
+                const shouldCapture = p === 1;
+                const artefacts = shouldCapture ? await captureFailure(page, "linkedin", "zero-cards") : null;
+                logger.warn(
+                  verdict === "blocked"
+                    ? "0 carte — blocage probable (rate-limit ou réponse non-2xx)"
+                    : "0 carte malgré une page non vide — sélecteur probablement cassé",
+                  {
+                    verdict,
+                    selector: CARD_SELECTOR,
+                    term,
+                    lieu,
+                    url,
+                    status,
+                    capture: artefacts
+                      ? `${artefacts}.html / .png`
+                      : shouldCapture
+                        ? "échec capture"
+                        : "non capturé (page>1)",
+                  },
+                );
+              }
+              break; // boucle de pages seulement → (lieu, terme) suivant
             }
-            break; // boucle de pages seulement → terme suivant
+
+            const pageOffers = finalizeOffers(raws, "linkedin", report);
+            for (const offer of pageOffers) {
+              if (!seen.has(offer.urlSource)) {
+                seen.add(offer.urlSource);
+                allOffers.push(offer);
+              }
+            }
+
+            // `start` incrémenté du nombre de cartes réellement renvoyées : l'endpoint
+            // guest en rend un nombre variable, ce qui évite chevauchements et trous.
+            start += diag.cardCount;
+
+            if (limit && allOffers.length >= limit) break searchLoop;
+            if (p < maxPages) await page.waitForTimeout(1500);
           }
 
-          const pageOffers = finalizeOffers(raws, "linkedin", report);
-          for (const offer of pageOffers) {
-            if (!seen.has(offer.urlSource)) {
-              seen.add(offer.urlSource);
-              allOffers.push(offer);
-            }
-          }
-
-          // `start` incrémenté du nombre de cartes réellement renvoyées : l'endpoint
-          // guest en rend un nombre variable, ce qui évite chevauchements et trous.
-          start += diag.cardCount;
-
-          if (limit && allOffers.length >= limit) break termsLoop;
-          if (p < maxPages) await page.waitForTimeout(1500);
+          await page.waitForTimeout(1500); // délai poli entre deux recherches
         }
-
-        if (limit && allOffers.length >= limit) break;
-        await page.waitForTimeout(1500); // délai poli entre deux termes
       }
 
       report.log(logger);
