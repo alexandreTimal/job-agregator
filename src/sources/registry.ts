@@ -1,16 +1,25 @@
 import type { ScrapingSource } from "../lib/source-interface";
 import { wttjSource } from "./wttj";
 import { helloworkSource } from "./hellowork";
+import { greenhouseSource } from "./ats/greenhouse";
+import { leverSource } from "./ats/lever";
 
 /**
- * Liste des sources actives du MVP. Ajouter une source = créer son fichier
- * (interface ScrapingSource) puis l'ajouter ici.
+ * Registry des sources. Ajouter une source = créer son fichier (interface
+ * ScrapingSource) puis l'ajouter ici.
  *
- * Phase 1.5 (à porter depuis Job_watcher/src/sources) : indeed, linkedin-email,
- * google-alerts-rss, station-f, career-pages. France Travail (API) ajoutable
- * trivialement, même interface.
+ * - web : wttj, hellowork (scraping navigateur).
+ * - ats : greenhouse, lever (API JSON ; boards éditables depuis l'UI via
+ *   `settings.atsBoards`). Restent inertes tant qu'aucun board n'est configuré.
+ *
+ * À porter ensuite (best-effort) : indeed, linkedin, station-f.
  */
-export const sources: ScrapingSource[] = [wttjSource, helloworkSource];
+export const sources: ScrapingSource[] = [
+  wttjSource,
+  helloworkSource,
+  greenhouseSource,
+  leverSource,
+];
 
 /**
  * Filtre le registry par les noms de sources activées (cf. `enabledSources`
