@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Offer, OfferFilter, OfferSort, Run, Stats, SourceCount } from "../shared/types";
 import { classifyContractType } from "../lib/contract-type";
+import { computeHash } from "../lib/normalize";
 import { aggregateLocations } from "../lib/stats-aggregate";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -72,8 +73,57 @@ export function initDb(): Database.Database {
   ensureColumn(db, "contract_type", "contract_type TEXT");
 
   backfillContractTypes(db);
+  migrateHashScheme(db);
 
   return db;
+}
+
+/**
+ * Recalcule les `hash` hérités (schéma titre+entreprise+lieu) vers le schéma
+ * actuel (titre+entreprise seuls, cf. `computeHash`). Sans cette migration, au
+ * 1er run post-changement chaque offre connue aurait un hash recalculé
+ * différent → ré-insérée en double, et les offres supprimées réapparaîtraient
+ * (le bug même qu'on corrige). Versionné par `PRAGMA user_version` (et NON la
+ * table `settings`, dont la vacuité pilote le seed initial) → idempotent et
+ * sans coût après le premier passage.
+ *
+ * Collision : deux lignes même titre+entreprise (lieux jadis distincts)
+ * partagent désormais un hash, or la colonne est UNIQUE. On fusionne : survivant
+ * = plus ancien `id` ; il hérite de `deleted`/`liked` par OU logique (une
+ * suppression ou un favori sur l'une vaut pour la fusion), les autres sont
+ * effacées.
+ */
+function migrateHashScheme(database: Database.Database): void {
+  const version = database.pragma("user_version", { simple: true }) as number;
+  if (version >= 1) return;
+
+  const rows = database
+    .prepare(`SELECT id, title, company, deleted, liked FROM seen_offers ORDER BY id ASC`)
+    .all() as { id: number; title: string; company: string | null; deleted: number; liked: number }[];
+
+  // Regroupe par NOUVEAU hash (titre+entreprise).
+  const groups = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const h = computeHash({ title: r.title, company: r.company });
+    const g = groups.get(h);
+    if (g) g.push(r);
+    else groups.set(h, [r]);
+  }
+
+  const del = database.prepare(`DELETE FROM seen_offers WHERE id = ?`);
+  const upd = database.prepare(`UPDATE seen_offers SET hash = ?, deleted = ?, liked = ? WHERE id = ?`);
+  const apply = database.transaction(() => {
+    for (const [hash, group] of groups) {
+      const survivor = group[0]; // ORDER BY id ASC → plus ancien d'abord.
+      if (!survivor) continue; // groupe jamais vide en pratique ; garde le typeur tranquille.
+      const deleted = group.some((r) => r.deleted) ? 1 : 0;
+      const liked = group.some((r) => r.liked) ? 1 : 0;
+      for (const loser of group.slice(1)) del.run(loser.id);
+      upd.run(hash, deleted, liked, survivor.id);
+    }
+    database.pragma("user_version = 1");
+  });
+  apply();
 }
 
 /**

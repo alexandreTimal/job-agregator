@@ -167,10 +167,17 @@ toutes les sources.
 ### Déduplication
 
 - Le dedup est centralisé dans `src/store/sqlite.ts`.
-- La clé de dedup est un **hash composite normalisé** (`title + company +
-  location`), pas l'URL seule (les re-posts changent d'URL).
+- La clé de dedup est un **hash composite normalisé** (`title + company`), pas
+  l'URL seule (les re-posts changent d'URL). Le **lieu est volontairement EXCLU**
+  du hash : les sources le rendent de façon instable (« Paris » → « Paris 9e »…),
+  ce qui faisait varier le hash d'un re-post et le faisait échapper à la dédup —
+  et surtout à la suppression (une offre soft-deleted réapparaissait). Compromis
+  assumé : un même intitulé chez une même entreprise dans deux villes = une offre.
+  Changer ce schéma impose une migration des `hash` existants (`migrateHashScheme`,
+  versionnée par `PRAGMA user_version`, fusionne les collisions).
 - La **suppression** d'offre est un **soft-delete** (colonne `deleted`) : cachée
-  de l'UI, toujours connue du dédup, jamais re-proposée.
+  de l'UI, toujours connue du dédup (`offerExists` ignore `deleted`), jamais
+  re-proposée même si le re-post revient avec un lieu différent.
 - `notified_notion` est **obsolète** (Notion supprimé) : la colonne reste pour
   compat mais n'est plus utilisée. L'orchestrateur compte désormais
   explicitement `new` vs `duplicates` (fini l'`INSERT OR IGNORE` muet).
