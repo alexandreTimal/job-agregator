@@ -123,3 +123,32 @@ export function parsePublishedAt(raw: string | null | undefined): Date | null {
 
   return null;
 }
+
+/**
+ * Ajoute `days` jours OUVRABLES (lundi–vendredi) à une date, en sautant les
+ * week-ends (samedi/dimanche). Aucun jour férié n'est pris en compte (hors
+ * scope assumé).
+ *
+ * Le résultat est ancré à midi UTC (comme `parseFrenchAbsoluteDate`) pour que
+ * la composante jour reste stable quel que soit le fuseau d'affichage : on
+ * raisonne sur une date calendaire (la date de relance), pas sur un instant.
+ *
+ * Fonction pure et déterministe : aucun I/O. Sert au calcul de la date de
+ * relance après une candidature (« +3 jours ouvrables »).
+ *
+ * @param from  Instant de départ ; seul le JOUR calendaire UTC est lu (heure ignorée).
+ * @param days  Nombre de jours ouvrables à ajouter (entier ≥ 0 ; tronqué et borné à 0).
+ */
+export function addBusinessDays(from: Date, days: number): Date {
+  // Ancre à midi UTC sur le jour calendaire UTC de `from`.
+  const d = new Date(
+    Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate(), 12, 0, 0),
+  );
+  let remaining = Math.max(0, Math.trunc(days));
+  while (remaining > 0) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const dow = d.getUTCDay(); // 0 = dimanche … 6 = samedi
+    if (dow !== 0 && dow !== 6) remaining -= 1;
+  }
+  return d;
+}

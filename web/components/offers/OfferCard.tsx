@@ -7,16 +7,18 @@
  * au survol (signal) ou en favori (ambre).
  */
 import { useEffect, useState } from "react";
-import { Heart, Trash2, ArrowUpRight, MapPin, Building2 } from "lucide-react";
+import { Heart, Trash2, ArrowUpRight, MapPin, Building2, Send, CalendarClock } from "lucide-react";
 import type { Offer } from "../../../src/shared/types";
-import { ancienneteRelative } from "./relative-time";
+import { ancienneteRelative, formatDateRelance } from "./relative-time";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 interface OfferCardProps {
   offre: Offer;
-  /** True pendant qu'une action (like/delete) est en cours sur cette offre. */
+  /** True pendant qu'une action (like/applied/delete) est en cours sur cette offre. */
   enCours: boolean;
   onToggleLike: (offre: Offer) => void;
+  onToggleApplied: (offre: Offer) => void;
   onDelete: (offre: Offer) => void;
 }
 
@@ -24,8 +26,15 @@ function logoSource(source: string): string {
   return `/logos/${source}.svg`;
 }
 
-export default function OfferCard({ offre, enCours, onToggleLike, onDelete }: OfferCardProps) {
+export default function OfferCard({
+  offre,
+  enCours,
+  onToggleLike,
+  onToggleApplied,
+  onDelete,
+}: OfferCardProps) {
   const date = offre.publishedAt ?? offre.firstSeenAt;
+  const postule = offre.appliedAt !== null;
   const [logoCasse, setLogoCasse] = useState(false);
 
   useEffect(() => {
@@ -122,6 +131,20 @@ export default function OfferCard({ offre, enCours, onToggleLike, onDelete }: Of
             {ancienneteRelative(date)}
           </time>
         </div>
+
+        {postule && offre.followUpAt && (
+          <div className="mt-2.5">
+            <Badge tone="signal">
+              <CalendarClock aria-hidden="true" className="size-3.5" />
+              <span>
+                Relance le{" "}
+                <span className="font-[family-name:var(--font-mono)]">
+                  {formatDateRelance(offre.followUpAt)}
+                </span>
+              </span>
+            </Badge>
+          </div>
+        )}
       </div>
 
       {/* Actions */}
@@ -141,6 +164,23 @@ export default function OfferCard({ offre, enCours, onToggleLike, onDelete }: Of
           )}
         >
           <Heart aria-hidden="true" className={cn("size-4", offre.liked && "fill-current")} />
+        </button>
+        <button
+          type="button"
+          aria-pressed={postule}
+          aria-label={postule ? "Annuler « postulée »" : "Marquer comme postulée"}
+          title={postule ? "Annuler « postulée »" : "J'ai postulé"}
+          disabled={enCours}
+          onClick={() => onToggleApplied(offre)}
+          className={cn(
+            "grid size-9 place-items-center rounded-[var(--radius-xs)] border transition-all duration-200",
+            "disabled:cursor-progress disabled:opacity-40",
+            postule
+              ? "border-[var(--color-signal)]/40 bg-[var(--color-signal)]/15 text-[var(--color-signal)]"
+              : "border-[var(--color-line)] text-[var(--color-ink-mute)] hover:border-[var(--color-signal)]/40 hover:text-[var(--color-signal)]",
+          )}
+        >
+          <Send aria-hidden="true" className="size-4" />
         </button>
         <button
           type="button"

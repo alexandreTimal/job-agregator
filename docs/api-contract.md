@@ -12,8 +12,16 @@ synchronisée ici ET dans `src/shared/types.ts`.
 ## Types (rappel)
 
 Voir `src/shared/types.ts` pour les définitions canoniques :
-`Offer`, `OfferFilter` (`"all" | "liked"`), `OfferSort` (`"recent" | "score"`),
+`Offer`, `OfferFilter` (`"all" | "liked" | "applied"`), `OfferSort` (`"recent" | "score"`),
 `Settings`, `SourceCount`, `Run`, `Stats`, `RunEvent`.
+
+`Offer` porte deux champs liés au suivi de candidature :
+
+- `appliedAt` : date (ISO 8601) du clic « J'ai postulé », ou `null` si non postulée.
+  Sert à la fois de drapeau « postulée » et de point de départ de la relance.
+- `followUpAt` : date de relance **dérivée** = `appliedAt` + 3 jours ouvrables
+  (samedi/dimanche sautés, sans jours fériés), ou `null`. Jamais persistée :
+  recalculée côté serveur à chaque lecture.
 
 ## Routes
 
@@ -23,10 +31,10 @@ Liste les offres visibles (exclut systématiquement `deleted = 1`).
 
 Query params :
 
-| Param    | Valeurs                | Défaut    | Rôle                                    |
-| -------- | ---------------------- | --------- | --------------------------------------- |
-| `filter` | `all` \| `liked`       | `all`     | `liked` ne renvoie que les favoris.     |
-| `sort`   | `recent` \| `score`    | `recent`  | Tri ; les likées remontent en tête.     |
+| Param    | Valeurs                       | Défaut    | Rôle                                              |
+| -------- | ----------------------------- | --------- | ------------------------------------------------- |
+| `filter` | `all` \| `liked` \| `applied` | `all`     | `liked` = favoris ; `applied` = offres postulées. |
+| `sort`   | `recent` \| `score`           | `recent`  | Tri ; les likées remontent en tête.               |
 
 - `recent` : tri par `publishedAt ?? firstSeenAt` décroissant.
 - `score`  : tri par `score` décroissant puis date décroissante.
@@ -41,6 +49,19 @@ Bascule l'état favori d'une offre.
 - Param de chemin `:id` : identifiant numérique de l'offre.
 - Corps : `{ "liked": boolean }`.
 - Réponse `200` : `{ "ok": true }`.
+- `404` si l'`id` est inconnu.
+
+### POST /api/offers/:id/applied
+
+Marque (ou démarque) une offre comme « postulée ».
+
+- Param de chemin `:id` : identifiant numérique de l'offre.
+- Corps : `{ "applied": boolean }`.
+- `applied: true` fige l'instant courant dans `appliedAt` ; `applied: false`
+  repasse `appliedAt` (et donc `followUpAt`) à `null`.
+- Réponse `200` : `{ "ok": true, "appliedAt": string | null, "followUpAt": string | null }`
+  — les dates recalculées, pour une mise à jour optimiste côté UI sans rechargement.
+- `400` si le corps est mal formé (champ `applied` non booléen).
 - `404` si l'`id` est inconnu.
 
 ### POST /api/offers/:id/delete

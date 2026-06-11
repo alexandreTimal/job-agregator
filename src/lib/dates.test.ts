@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parsePublishedAt } from "./dates";
+import { parsePublishedAt, addBusinessDays } from "./dates";
 
 /** Raccourci : composante date (YYYY-MM-DD) en UTC, ou null. */
 function ymd(raw: string | null): string | null {
@@ -53,4 +53,31 @@ test("non-dates → null (pas de faux positif)", () => {
   assert.equal(ymd("Stage"), null);
   assert.equal(ymd(""), null);
   assert.equal(ymd(null), null);
+});
+
+/** Raccourci : +N jours ouvrables sur une date UTC, composante jour (YYYY-MM-DD). */
+function plusOuvres(isoDay: string, days: number): string {
+  return addBusinessDays(new Date(`${isoDay}T10:00:00Z`), days).toISOString().slice(0, 10);
+}
+
+test("addBusinessDays — saute le week-end (cas de la matrice)", () => {
+  // Jeudi 11 juin 2026 +3 ouvrés → mardi 16 (saute sam 13 + dim 14).
+  assert.equal(plusOuvres("2026-06-11", 3), "2026-06-16");
+  // Vendredi 12 juin +3 ouvrés → mercredi 17 (saute sam 13 + dim 14).
+  assert.equal(plusOuvres("2026-06-12", 3), "2026-06-17");
+  // Lundi 8 juin +3 ouvrés → jeudi 11 (semaine pleine, aucun week-end).
+  assert.equal(plusOuvres("2026-06-08", 3), "2026-06-11");
+});
+
+test("addBusinessDays — départ un week-end : comptage dès lundi", () => {
+  // Samedi 13 juin +3 ouvrés → lun/mar/mer → mercredi 17.
+  assert.equal(plusOuvres("2026-06-13", 3), "2026-06-17");
+  // Dimanche 14 juin +3 ouvrés → mercredi 17.
+  assert.equal(plusOuvres("2026-06-14", 3), "2026-06-17");
+});
+
+test("addBusinessDays — 0 jour rend le jour même (ancré midi UTC)", () => {
+  const d = addBusinessDays(new Date("2026-06-11T23:30:00Z"), 0);
+  assert.equal(d.toISOString().slice(0, 10), "2026-06-11");
+  assert.equal(d.getUTCHours(), 12);
 });

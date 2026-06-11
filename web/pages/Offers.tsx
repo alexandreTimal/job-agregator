@@ -13,7 +13,7 @@
  * pas surfacé dans l'UI (pipeline non scorant) : pas de tri ni d'affichage.
  */
 import { useCallback, useEffect, useState } from "react";
-import { RefreshCw, Inbox, Star, Layers } from "lucide-react";
+import { RefreshCw, Inbox, Star, Send, Layers } from "lucide-react";
 import type { Offer, OfferFilter } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
 import OfferCard from "../components/offers/OfferCard";
@@ -79,6 +79,48 @@ export default function Offers() {
     }
   }
 
+  async function basculerPostule(offre: Offer) {
+    const cible = offre.appliedAt === null; // true = on marque comme postulée
+    setErreur(null);
+    marquerEnCours(offre.id, true);
+    // MAJ optimiste du drapeau « postulée » ; la date de relance vient du serveur
+    // (calcul des 3 jours ouvrables), on l'efface en attendant la réponse.
+    setOffres((prev) =>
+      prev.map((o) =>
+        o.id === offre.id
+          ? { ...o, appliedAt: cible ? new Date().toISOString() : null, followUpAt: null }
+          : o,
+      ),
+    );
+    try {
+      const res = await apiClient.applyOffer(offre.id, cible);
+      // Réconcilie avec les dates calculées côté serveur (appliedAt + relance).
+      setOffres((prev) =>
+        prev.map((o) =>
+          o.id === offre.id
+            ? { ...o, appliedAt: res.appliedAt, followUpAt: res.followUpAt }
+            : o,
+        ),
+      );
+      // Sur le filtre « Postulées », démarquer retire l'offre de la liste.
+      if (filtre === "applied" && !cible) {
+        setOffres((prev) => prev.filter((o) => o.id !== offre.id));
+      }
+    } catch (e) {
+      // Annule la MAJ optimiste en cas d'échec.
+      setOffres((prev) =>
+        prev.map((o) =>
+          o.id === offre.id
+            ? { ...o, appliedAt: offre.appliedAt, followUpAt: offre.followUpAt }
+            : o,
+        ),
+      );
+      setErreur(e instanceof Error ? e.message : "Échec de la mise à jour de l'état postulé.");
+    } finally {
+      marquerEnCours(offre.id, false);
+    }
+  }
+
   async function supprimer(offre: Offer) {
     // Repart d'un état propre : efface un éventuel message d'erreur précédent.
     setErreur(null);
@@ -111,6 +153,7 @@ export default function Offers() {
           options={[
             { value: "all", label: "Toutes", icon: <Inbox /> },
             { value: "liked", label: "Favoris", icon: <Star /> },
+            { value: "applied", label: "Postulées", icon: <Send /> },
           ]}
         />
 
@@ -163,15 +206,27 @@ export default function Offers() {
             aria-hidden="true"
             className="grid size-12 place-items-center rounded-full border border-[var(--color-line)] bg-black/20 text-[var(--color-ink-mute)]"
           >
-            {filtre === "liked" ? <Star className="size-5" /> : <Layers className="size-5" />}
+            {filtre === "liked" ? (
+              <Star className="size-5" />
+            ) : filtre === "applied" ? (
+              <Send className="size-5" />
+            ) : (
+              <Layers className="size-5" />
+            )}
           </div>
           <p className="mt-4 text-[0.95rem] font-medium text-[var(--color-ink-soft)]">
-            {filtre === "liked" ? "Aucun favori pour le moment" : "Aucune offre à afficher"}
+            {filtre === "liked"
+              ? "Aucun favori pour le moment"
+              : filtre === "applied"
+                ? "Aucune offre postulée"
+                : "Aucune offre à afficher"}
           </p>
           <p className="mt-1 max-w-xs text-sm text-[var(--color-ink-mute)]">
             {filtre === "liked"
               ? "Marquez des offres d'une étoile pour les retrouver ici."
-              : "Lancez une collecte pour peupler le flux."}
+              : filtre === "applied"
+                ? "Cliquez « J'ai postulé » sur une offre pour la suivre ici."
+                : "Lancez une collecte pour peupler le flux."}
           </p>
         </div>
       )}
@@ -186,6 +241,7 @@ export default function Offers() {
                   offre={offre}
                   enCours={actionsEnCours.has(offre.id)}
                   onToggleLike={basculerFavori}
+                  onToggleApplied={basculerPostule}
                   onDelete={supprimer}
                 />
               </li>

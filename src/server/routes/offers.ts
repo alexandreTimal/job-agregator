@@ -1,20 +1,30 @@
 /**
  * Routes des offres (cf. docs/api-contract.md).
  *
- *   GET    /api/offers?filter=all|liked&sort=recent|score → Offer[]
- *   POST   /api/offers/:id/like   body {liked:boolean}    → {ok:true}
- *   POST   /api/offers/:id/delete                         → {ok:true} (soft-delete)
+ *   GET    /api/offers?filter=all|liked|applied&sort=recent|score → Offer[]
+ *   POST   /api/offers/:id/like    body {liked:boolean}    → {ok:true}
+ *   POST   /api/offers/:id/applied body {applied:boolean}  → {ok:true, appliedAt, followUpAt}
+ *   POST   /api/offers/:id/delete                          → {ok:true} (soft-delete)
  *
  * Toute la logique d'accès vit dans `src/store/sqlite.ts` ; ces handlers ne
  * font que valider les entrées et appeler les fonctions d'accès.
  */
 import type { FastifyInstance } from "fastify";
 import type { OfferFilter, OfferSort } from "../../shared/types";
-import { offerExistsById, listOffers, setLiked, setDeleted } from "../../store/sqlite";
+import {
+  offerExistsById,
+  listOffers,
+  setLiked,
+  setApplied,
+  getOfferById,
+  setDeleted,
+} from "../../store/sqlite";
 
 /** Normalise le query param `filter` (défaut : `all`). */
 function parseFilter(value: unknown): OfferFilter {
-  return value === "liked" ? "liked" : "all";
+  if (value === "liked") return "liked";
+  if (value === "applied") return "applied";
+  return "all";
 }
 
 /** Normalise le query param `sort` (défaut : `recent`). */
@@ -56,6 +66,32 @@ export async function registerOffersRoutes(app: FastifyInstance): Promise<void> 
       }
       setLiked(id, liked);
       return { ok: true };
+    },
+  );
+
+  // Marque/démarque une offre comme « postulée ». Renvoie les dates calculées
+  // (appliedAt + relance dérivée) pour une MAJ optimiste côté UI sans rechargement.
+  app.post<{ Params: { id: string }; Body: { applied?: unknown } }>(
+    "/api/offers/:id/applied",
+    async (request, reply) => {
+      const id = parseId(request.params.id);
+      if (id === null) {
+        return reply.code(400).send({ ok: false, error: "identifiant invalide" });
+      }
+      const applied = request.body?.applied;
+      if (typeof applied !== "boolean") {
+        return reply.code(400).send({ ok: false, error: "champ 'applied' booléen requis" });
+      }
+      if (!offerExistsById(id)) {
+        return reply.code(404).send({ ok: false, error: "offre inconnue" });
+      }
+      setApplied(id, applied);
+      const offre = getOfferById(id);
+      return {
+        ok: true,
+        appliedAt: offre?.appliedAt ?? null,
+        followUpAt: offre?.followUpAt ?? null,
+      };
     },
   );
 

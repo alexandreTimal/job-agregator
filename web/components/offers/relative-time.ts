@@ -39,3 +39,23 @@ export function ancienneteRelative(iso: string | null, now: number = Date.now())
   }
   return "date inconnue";
 }
+
+/** Formateur de date calendaire français (« 16 juin 2026 »), ancré UTC. */
+const FORMAT_DATE_RELANCE = new Intl.DateTimeFormat("fr-FR", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/**
+ * Formate une date de relance (`followUpAt`, ISO 8601 ancrée à midi UTC) en
+ * libellé court français. `timeZone: "UTC"` empêche tout décalage de jour à
+ * l'affichage. Renvoie `""` si la date est absente ou invalide.
+ */
+export function formatDateRelance(iso: string | null): string {
+  if (!iso) return "";
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return "";
+  return FORMAT_DATE_RELANCE.format(ts);
+}

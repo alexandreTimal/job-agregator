@@ -6,6 +6,10 @@ import type { Offer, OfferFilter, OfferSort, Run, Stats, SourceCount } from "../
 import { classifyContractType } from "../lib/contract-type";
 import { computeHash } from "../lib/normalize";
 import { aggregateLocations } from "../lib/stats-aggregate";
+import { addBusinessDays } from "../lib/dates";
+
+/** Jours ouvrables (week-ends sautés) entre la candidature et la relance (cf. spec). */
+const FOLLOW_UP_BUSINESS_DAYS = 3;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DB_PATH = resolve(__dirname, "../../data/job-agregator.db");
@@ -71,6 +75,7 @@ export function initDb(): Database.Database {
   ensureColumn(db, "deleted", "deleted BOOLEAN DEFAULT 0");
   ensureColumn(db, "published_at", "published_at DATETIME");
   ensureColumn(db, "contract_type", "contract_type TEXT");
+  ensureColumn(db, "applied_at", "applied_at DATETIME");
 
   backfillContractTypes(db);
   migrateHashScheme(db);
@@ -227,8 +232,21 @@ interface OfferRow {
   source: string;
   score: number;
   liked: number;
+  applied_at: string | null;
   published_at: string | null;
   first_seen_at: string;
+}
+
+/**
+ * Dérive la date de relance d'une candidature : `applied_at` + 3 jours ouvrables.
+ * `applied_at` est stocké en UTC (`CURRENT_TIMESTAMP`, format « YYYY-MM-DD HH:MM:SS ») :
+ * on force l'interprétation UTC avant le calcul. Renvoie `null` si non postulée.
+ */
+function computeFollowUpAt(appliedAt: string | null): string | null {
+  if (!appliedAt) return null;
+  const start = new Date(`${appliedAt.replace(" ", "T")}Z`);
+  if (Number.isNaN(start.getTime())) return null;
+  return addBusinessDays(start, FOLLOW_UP_BUSINESS_DAYS).toISOString();
 }
 
 function rowToOffer(r: OfferRow): Offer {
@@ -242,6 +260,8 @@ function rowToOffer(r: OfferRow): Offer {
     source: r.source,
     score: r.score,
     liked: r.liked === 1,
+    appliedAt: r.applied_at,
+    followUpAt: computeFollowUpAt(r.applied_at),
     publishedAt: r.published_at,
     firstSeenAt: r.first_seen_at,
   };
@@ -252,7 +272,9 @@ function rowToOffer(r: OfferRow): Offer {
  * Les favoris (`liked = 1`) remontent toujours en tête, quel que soit le tri.
  */
 export function listOffers(filter: OfferFilter, sort: OfferSort): Offer[] {
-  const where = filter === "liked" ? "deleted = 0 AND liked = 1" : "deleted = 0";
+  let where = "deleted = 0";
+  if (filter === "liked") where = "deleted = 0 AND liked = 1";
+  else if (filter === "applied") where = "deleted = 0 AND applied_at IS NOT NULL";
   const secondary =
     sort === "score"
       ? "score DESC, COALESCE(published_at, first_seen_at) DESC"
@@ -260,7 +282,7 @@ export function listOffers(filter: OfferFilter, sort: OfferSort): Offer[] {
 
   const rows = getDb()
     .prepare(
-      `SELECT id, hash, title, company, location, url, source, score, liked, published_at, first_seen_at
+      `SELECT id, hash, title, company, location, url, source, score, liked, applied_at, published_at, first_seen_at
        FROM seen_offers
        WHERE ${where}
        ORDER BY liked DESC, ${secondary}`,
@@ -283,6 +305,44 @@ export function setLiked(id: number, liked: boolean): void {
 /** Soft-delete : l'offre disparaît de l'UI mais reste connue du dédup. */
 export function setDeleted(id: number): void {
   getDb().prepare(`UPDATE seen_offers SET deleted = 1 WHERE id = ?`).run(id);
+}
+
+/**
+ * Marque (ou démarque) une offre comme « postulée ». À l'activation, fige
+ * l'instant du clic dans `applied_at` (UTC) — point de départ de la relance ;
+ * à la désactivation, repasse `applied_at` à NULL (l'offre quitte le filtre).
+ *
+ * L'activation est IDEMPOTENTE (`AND applied_at IS NULL`) : un second `true`
+ * (double-clic, client obsolète) ne ré-estampe pas la date et ne décale donc
+ * pas la relance déjà calculée.
+ */
+export function setApplied(id: number, applied: boolean): void {
+  if (applied) {
+    getDb()
+      .prepare(
+        `UPDATE seen_offers SET applied_at = CURRENT_TIMESTAMP WHERE id = ? AND applied_at IS NULL`,
+      )
+      .run(id);
+  } else {
+    getDb().prepare(`UPDATE seen_offers SET applied_at = NULL WHERE id = ?`).run(id);
+  }
+}
+
+/**
+ * Lit une offre par id (mappée pour l'UI), ou `null` si l'id est inconnu.
+ * Ne filtre PAS `deleted` : sert au read-back après `setApplied`, où l'on veut
+ * renvoyer les dates calculées de façon cohérente avec le `offerExistsById`
+ * du handler (qui, lui non plus, ne filtre pas `deleted`).
+ */
+export function getOfferById(id: number): Offer | null {
+  const row = getDb()
+    .prepare(
+      `SELECT id, hash, title, company, location, url, source, score, liked, applied_at, published_at, first_seen_at
+       FROM seen_offers
+       WHERE id = ?`,
+    )
+    .get(id) as OfferRow | undefined;
+  return row ? rowToOffer(row) : null;
 }
 
 /* ------------------------------------------------------------------ */

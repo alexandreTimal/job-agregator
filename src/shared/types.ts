@@ -14,6 +14,10 @@
  *
  * - `id`            : identifiant sqlite (clé primaire de `seen_offers`).
  * - `liked`         : 1 si l'offre est en favori, sinon 0.
+ * - `appliedAt`     : date du clic « J'ai postulé » (ISO 8601) ou null (non postulée).
+ *                     Sert de drapeau « postulée » ET de point de départ de la relance.
+ * - `followUpAt`    : date de relance DÉRIVÉE = `appliedAt` + 3 jours ouvrables
+ *                     (week-ends sautés), ou null si non postulée. Jamais stockée.
  * - `publishedAt`   : vraie date de publication scrapée (ISO 8601) ou null.
  * - `firstSeenAt`   : date de première découverte par le pipeline (ISO 8601).
  *                     L'UI affiche `publishedAt ?? firstSeenAt` pour l'ancienneté.
@@ -28,12 +32,14 @@ export interface Offer {
   source: string;
   score: number;
   liked: boolean;
+  appliedAt: string | null;
+  followUpAt: string | null;
   publishedAt: string | null;
   firstSeenAt: string;
 }
 
 /** Filtre de liste appliqué à GET /api/offers. */
-export type OfferFilter = "all" | "liked";
+export type OfferFilter = "all" | "liked" | "applied";
 
 /** Tri appliqué à GET /api/offers (les likées remontent toujours en tête). */
 export type OfferSort = "recent" | "score";

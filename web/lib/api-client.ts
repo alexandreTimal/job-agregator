@@ -45,6 +45,8 @@ const MOCK_OFFERS: Offer[] = [
     source: "wttj",
     score: 80,
     liked: true,
+    appliedAt: "2026-06-11T09:00:00.000Z",
+    followUpAt: "2026-06-16T12:00:00.000Z",
     publishedAt: "2026-06-10T09:00:00.000Z",
     firstSeenAt: "2026-06-10T10:00:00.000Z",
   },
@@ -58,6 +60,8 @@ const MOCK_OFFERS: Offer[] = [
     source: "hellowork",
     score: 60,
     liked: false,
+    appliedAt: null,
+    followUpAt: null,
     publishedAt: null,
     firstSeenAt: "2026-06-11T08:00:00.000Z",
   },
@@ -116,7 +120,9 @@ const MOCK_STATS: Stats = {
 export const apiClient = {
   async getOffers(filter: OfferFilter = "all", sort: OfferSort = "recent"): Promise<Offer[]> {
     if (USE_MOCK) {
-      const list = filter === "liked" ? MOCK_OFFERS.filter((o) => o.liked) : MOCK_OFFERS;
+      let list = MOCK_OFFERS;
+      if (filter === "liked") list = MOCK_OFFERS.filter((o) => o.liked);
+      else if (filter === "applied") list = MOCK_OFFERS.filter((o) => o.appliedAt !== null);
       return Promise.resolve([...list]);
     }
     const params = new URLSearchParams({ filter, sort });
@@ -129,6 +135,29 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify({ liked }),
     });
+  },
+
+  /**
+   * Marque/démarque une offre comme « postulée ». Renvoie les dates recalculées
+   * côté serveur (`appliedAt` + relance dérivée), pour une MAJ optimiste sans
+   * rechargement de la liste.
+   */
+  async applyOffer(
+    id: number,
+    applied: boolean,
+  ): Promise<{ ok: true; appliedAt: string | null; followUpAt: string | null }> {
+    if (USE_MOCK) {
+      const followUpAt = applied ? "2026-06-16T12:00:00.000Z" : null;
+      return Promise.resolve({
+        ok: true,
+        appliedAt: applied ? "2026-06-11T09:00:00.000Z" : null,
+        followUpAt,
+      });
+    }
+    return http<{ ok: true; appliedAt: string | null; followUpAt: string | null }>(
+      `/api/offers/${id}/applied`,
+      { method: "POST", body: JSON.stringify({ applied }) },
+    );
   },
 
   async deleteOffer(id: number): Promise<{ ok: true }> {
