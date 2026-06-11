@@ -68,6 +68,9 @@ const MOCK_SETTINGS: Settings = {
   contractTypes: ["CDI"],
   enabledSources: ["wttj", "hellowork"],
   atsBoards: { greenhouse: ["stripe"], lever: ["swile"] },
+  maxOfferAgeDays: 7,
+  cronEnabled: false,
+  cronTimes: ["08:00", "20:00"],
 };
 
 const MOCK_RUNS: Run[] = [

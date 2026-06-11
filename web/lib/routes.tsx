@@ -1,7 +1,7 @@
 /** Métadonnées des 3 routes — partagées par le shell (sidebar + en-tête de page). */
-import { Layers, BarChart3, SlidersHorizontal, type LucideIcon } from "lucide-react";
+import { Layers, BarChart3, Clock, SlidersHorizontal, type LucideIcon } from "lucide-react";
 
-export type RouteId = "offres" | "stats" | "parametres";
+export type RouteId = "offres" | "stats" | "cron" | "parametres";
 
 export interface RouteMeta {
   id: RouteId;
@@ -33,9 +33,17 @@ export const ROUTES: RouteMeta[] = [
     tagline: "Volume, sources et historique des passages du pipeline.",
   },
   {
+    id: "cron",
+    label: "Cron",
+    index: "03",
+    icon: Clock,
+    title: "La cadence",
+    tagline: "Planifie les recherches automatiques et les notifications de fin de run.",
+  },
+  {
     id: "parametres",
     label: "Paramètres",
-    index: "03",
+    index: "04",
     icon: SlidersHorizontal,
     title: "La console",
     tagline: "Termes recherchés, types de contrat et sources interrogées.",
@@ -44,6 +52,6 @@ export const ROUTES: RouteMeta[] = [
 
 export function routeFromHash(): RouteId {
   const hash = window.location.hash.replace(/^#\/?/, "");
-  if (hash === "stats" || hash === "parametres") return hash;
+  if (hash === "stats" || hash === "cron" || hash === "parametres") return hash;
   return "offres";
 }

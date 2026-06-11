@@ -11,6 +11,8 @@
 import type { FastifyInstance } from "fastify";
 import type { Settings } from "../../shared/types";
 import { getSettings, setSettings } from "../../settings";
+import { isValidTime } from "../../lib/cron-schedule";
+import { getScheduler } from "../scheduler";
 
 /** Valeurs de `contractTypes` acceptées par le contrat. */
 const CONTRACT_TYPES = new Set(["stage", "CDI"]);
@@ -51,6 +53,21 @@ function parseSettingsBody(body: unknown): Settings | null {
   // contractTypes : uniquement "stage" et "CDI".
   if (!candidate.contractTypes.every((t) => CONTRACT_TYPES.has(t))) return null;
 
+  // maxOfferAgeDays : entier ≥ 0 (0 = sans limite).
+  const maxOfferAgeDays = candidate.maxOfferAgeDays;
+  if (
+    typeof maxOfferAgeDays !== "number" ||
+    !Number.isInteger(maxOfferAgeDays) ||
+    maxOfferAgeDays < 0
+  ) {
+    return null;
+  }
+
+  // cronEnabled : booléen ; cronTimes : tableau d'horaires "HH:MM" valides.
+  if (typeof candidate.cronEnabled !== "boolean") return null;
+  if (!isStringArray(candidate.cronTimes)) return null;
+  if (!candidate.cronTimes.every((t) => isValidTime(t))) return null;
+
   const clean = (list: string[]): string[] => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -68,6 +85,9 @@ function parseSettingsBody(body: unknown): Settings | null {
     contractTypes: clean(candidate.contractTypes),
     enabledSources: clean(candidate.enabledSources),
     atsBoards,
+    maxOfferAgeDays,
+    cronEnabled: candidate.cronEnabled,
+    cronTimes: clean(candidate.cronTimes),
   };
 }
 
@@ -80,6 +100,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return reply.code(400).send({ ok: false, error: "configuration mal formée" });
     }
     setSettings(settings);
+    // Réarme le scheduler sur les nouveaux horaires sans redémarrer le serveur.
+    getScheduler().reload();
     return { ok: true };
   });
 }

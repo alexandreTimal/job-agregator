@@ -9,6 +9,7 @@
     "fetch:dry": "tsx src/index.ts --dry-run",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "wttj:login": "tsx src/tools/wttj-login.ts",
+    "autostart:install": "tsx src/tools/install-autostart.ts",
     "build": "vite build",
     "start": "vite build && tsx src/server/index.ts",
     "typecheck": "tsc --noEmit",

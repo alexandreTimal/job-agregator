@@ -9,6 +9,7 @@ import { ROUTES, routeFromHash, type RouteId } from "@/lib/routes";
 import { Sidebar } from "@/components/layout/Sidebar";
 import Settings from "@/pages/Settings";
 import Stats from "@/pages/Stats";
+import Cron from "@/pages/Cron";
 import Offers from "@/pages/Offers";
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
   }, []);
 
   const meta = ROUTES.find((r) => r.id === route) ?? ROUTES[0]!;
+  const totalRoutes = String(ROUTES.length).padStart(2, "0");
 
   return (
     <div className="relative z-10 flex min-h-screen flex-col lg:flex-row">
@@ -36,7 +38,7 @@ export default function App() {
             <div className="flex items-center gap-2.5 font-[family-name:var(--font-mono)] text-[0.7rem] uppercase tracking-[0.2em] text-[var(--color-ink-mute)]">
               <span className="text-[var(--color-signal)]">/{meta.id}</span>
               <span className="h-px w-8 bg-[var(--color-line-strong)]" />
-              <span>{meta.index} — 03</span>
+              <span>{meta.index} — {totalRoutes}</span>
             </div>
             <h1 className="mt-3 font-[family-name:var(--font-serif)] text-[2.6rem] leading-[1.04] tracking-[-0.01em] text-[var(--color-ink)] sm:text-[3.4rem]">
               {meta.title}
@@ -50,6 +52,7 @@ export default function App() {
           <div key={`body-${route}`} className="animate-fade">
             {route === "offres" && <Offers />}
             {route === "stats" && <Stats />}
+            {route === "cron" && <Cron />}
             {route === "parametres" && <Settings />}
           </div>
         </div>

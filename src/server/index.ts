@@ -19,11 +19,13 @@ import { fileURLToPath } from "node:url";
 import { registerRoutes } from "./routes/index";
 import { initDb } from "../store/sqlite";
 import { seedSettingsIfEmpty } from "../settings";
+import { getScheduler } from "./scheduler";
 
 const HOST = "127.0.0.1";
-// 3000 par défaut (mode `npm run start`, site servi par Fastify). En dev, le
-// script `dev:server` force PORT=3001 pour laisser le 3000 à Vite (HMR).
-const PORT = Number(process.env.PORT ?? 3000);
+// 5627 par défaut (« JOBS » sur un clavier téléphonique) — choisi pour laisser
+// le port 3000 libre aux autres apps locales, le serveur restant allumé en
+// permanence via le service systemd --user. Surchargeable par la var `PORT`.
+const PORT = Number(process.env.PORT ?? 5627);
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 const PROJECT_ROOT = resolve(__dirname, "../..");
@@ -74,6 +76,19 @@ export async function buildServer() {
 async function start(): Promise<void> {
   const app = await buildServer();
   await app.listen({ host: HOST, port: PORT });
+
+  // Scheduler cron in-process : armé une fois le serveur à l'écoute. Maintenu
+  // vivant par le service systemd --user (cf. `npm run autostart:install`).
+  const scheduler = getScheduler();
+  scheduler.start();
+
+  const shutdown = (signal: string): void => {
+    app.log.info(`Arrêt du serveur (${signal})`);
+    scheduler.stop();
+    void app.close().finally(() => process.exit(0));
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 // Démarrage direct uniquement si exécuté en script (pas à l'import).

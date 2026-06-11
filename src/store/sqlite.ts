@@ -262,6 +262,22 @@ export function insertRun(run: {
   return Number(info.lastInsertRowid);
 }
 
+/**
+ * Timestamp (ms epoch) du run le plus récent, ou `null` si aucun run.
+ * `started_at` est stocké en UTC (`CURRENT_TIMESTAMP`) : on le convertit en
+ * epoch via strftime pour éviter toute ambiguïté de fuseau côté JS.
+ */
+export function getLastRunAtMs(): number | null {
+  const row = getDb()
+    .prepare(
+      `SELECT CAST(strftime('%s', started_at) AS INTEGER) AS epoch
+       FROM runs ORDER BY started_at DESC, id DESC LIMIT 1`,
+    )
+    .get() as { epoch: number | null } | undefined;
+  if (!row || row.epoch === null) return null;
+  return row.epoch * 1000;
+}
+
 interface RunRow {
   id: number;
   started_at: string;

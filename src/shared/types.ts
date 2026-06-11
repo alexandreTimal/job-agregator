@@ -45,12 +45,19 @@ export type OfferSort = "recent" | "score";
  * - `enabledSources`: noms des sources actives (cf. registry des sources).
  * - `atsBoards`     : pour chaque source ATS (greenhouse, lever), la liste des
  *                     tokens d'entreprise à interroger. Ex. `{ greenhouse: ["stripe"] }`.
+ * - `maxOfferAgeDays`: ancienneté max de mise en ligne en jours (entier ≥ 0 ;
+ *                     0 = sans limite). Une offre sans `publishedAt` passe (lenient).
+ * - `cronEnabled`   : active la planification automatique des runs (scheduler serveur).
+ * - `cronTimes`     : horaires quotidiens "HH:MM" (heure locale) des runs planifiés.
  */
 export interface Settings {
   terms: string[];
   contractTypes: string[];
   enabledSources: string[];
   atsBoards: Record<string, string[]>;
+  maxOfferAgeDays: number;
+  cronEnabled: boolean;
+  cronTimes: string[];
 }
 
 /** Comptage d'offres par source, avec le chemin du logo local. */
@@ -84,7 +91,7 @@ export interface Stats {
  * Événement SSE émis sur GET /api/run/stream pendant un run.
  *
  * - `type: 'progress'` : avancement (term/source/found renseignés best-effort).
- * - `type: 'done'`     : run terminé proprement.
+ * - `type: 'done'`     : run terminé proprement (`newOffers`/`found` renseignés).
  * - `type: 'error'`    : run échoué (message renseigné).
  */
 export interface RunEvent {
@@ -92,5 +99,7 @@ export interface RunEvent {
   term?: string;
   source?: string;
   found?: number;
+  /** Nombre d'offres NOUVELLES retenues, renseigné sur l'événement `done`. */
+  newOffers?: number;
   message?: string;
 }

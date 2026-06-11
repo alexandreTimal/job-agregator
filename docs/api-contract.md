@@ -64,12 +64,25 @@ Réponse `200` : `Settings`
   "terms": ["data engineer"],
   "contractTypes": ["CDI"],
   "enabledSources": ["wttj", "hellowork"],
-  "atsBoards": { "greenhouse": ["stripe"], "lever": ["swile"] }
+  "atsBoards": { "greenhouse": ["stripe"], "lever": ["swile"] },
+  "maxOfferAgeDays": 7,
+  "cronEnabled": false,
+  "cronTimes": ["08:00", "20:00"]
 }
 ```
 
 - `atsBoards` : Record de tokens d'entreprise par source ATS (`greenhouse`,
   `lever`). Optionnel en PUT (absent → `{}` par défaut).
+- `maxOfferAgeDays` : ancienneté max de mise en ligne, en jours. Entier ≥ 0 ;
+  `0` = sans limite (défaut `7`). Une offre sans date de publication est conservée
+  (filtre lenient).
+- `cronEnabled` : booléen. Quand vrai, le scheduler in-process déclenche un run à
+  chaque horaire de `cronTimes` (défaut `false`).
+- `cronTimes` : horaires quotidiens `"HH:MM"` (heure locale, `00:00`→`23:59`),
+  défaut `["08:00", "20:00"]`. À chaque horaire, un run est lancé puis une
+  notification bureau annonce le nombre de nouvelles offres. Au démarrage du
+  serveur, si un créneau a été manqué (PC éteint), un run de rattrapage est
+  déclenché une fois.
 
 ### PUT /api/settings
 
@@ -77,6 +90,11 @@ Remplace la configuration effective.
 
 - Corps : `Settings` (même forme que la réponse de GET /api/settings).
 - `contractTypes` : valeurs possibles `"stage"` et `"CDI"`.
+- `maxOfferAgeDays` : entier ≥ 0 obligatoire (`0` = sans limite). Un nombre
+  non entier ou négatif rend le corps invalide.
+- `cronEnabled` : booléen obligatoire.
+- `cronTimes` : tableau de chaînes `"HH:MM"` valides ; toute valeur hors format
+  rend le corps invalide. Après écriture, le scheduler est rechargé.
 - Réponse `200` : `{ "ok": true }`.
 - `400` si le corps est mal formé.
 
@@ -138,11 +156,12 @@ est un `RunEvent` sérialisé en JSON.
 ```
 data: {"type":"progress","term":"data engineer","source":"wttj","found":12}
 
-data: {"type":"done","message":"run terminé"}
+data: {"type":"done","message":"run terminé","newOffers":6}
 ```
 
 - `type: "progress"` : avancement (`term` / `source` / `found` best-effort).
-- `type: "done"`     : run terminé proprement.
+- `type: "done"`     : run terminé proprement. `newOffers` (optionnel) porte le
+  nombre de nouvelles offres du run, utilisé par la notification bureau du cron.
 - `type: "error"`    : run échoué (`message` renseigné).
 
 Le flux se ferme après l'événement `done` ou `error`.

@@ -64,7 +64,16 @@ const baseSettings: Settings = {
   contractTypes: ["CDI"],
   enabledSources: [],
   atsBoards: {},
+  maxOfferAgeDays: 0,
+  // Champs cron (requis par le type `Settings`) : neutres pour ce test d'orchestration.
+  cronEnabled: false,
+  cronTimes: [],
 };
+
+/** Date de publication il y a `n` jours (relatif à maintenant). */
+function daysAgo(n: number): Date {
+  return new Date(Date.now() - n * 86_400_000);
+}
 
 const baseConfig: SearchConfig = {
   terms: ["data engineer"],
@@ -121,7 +130,28 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
     ],
   });
 
-  const sources: ScrapingSource[] = [fakeAts, webA, webB, boom, excludedSrc];
+  // 6) Source exerçant le filtre d'âge : une offre récente (gardée) + une trop
+  //    ancienne (écartée par maxOfferAgeDays). Les autres offres ont publishedAt
+  //    null → lenient → insensibles au filtre d'âge.
+  const ageSrc = mockSource("freshness", {
+    kind: "web",
+    offers: [
+      makeOffer({
+        title: "Data engineer Recent",
+        company: "FreshCo",
+        urlSource: "https://f/recent",
+        publishedAt: daysAgo(1),
+      }),
+      makeOffer({
+        title: "Data engineer Old",
+        company: "OldCo",
+        urlSource: "https://f/old",
+        publishedAt: daysAgo(30),
+      }),
+    ],
+  });
+
+  const sources: ScrapingSource[] = [fakeAts, webA, webB, boom, excludedSrc, ageSrc];
 
   const settings: Settings = {
     ...baseSettings,
@@ -129,8 +159,13 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
     atsBoards: { fakeats: ["acme"] },
   };
 
-  // Config de filtre : exclut "stagiaire" (PAS un contractType sélectionné → bien rejeté).
-  const effectiveConfig: SearchConfig = { ...baseConfig, exclude: ["stagiaire"] };
+  // Config de filtre : exclut "stagiaire" (PAS un contractType sélectionné → bien rejeté)
+  // et n'accepte que les offres de moins de 7 jours (filtre d'ancienneté).
+  const effectiveConfig: SearchConfig = {
+    ...baseConfig,
+    exclude: ["stagiaire"],
+    maxOfferAgeDays: 7,
+  };
 
   const events: unknown[] = [];
   const summary = await runPipeline(
@@ -146,8 +181,9 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
   assert.deepEqual(atsCaptured.options?.terms, ["data engineer"], "la source ATS reçoit les terms");
 
   // --- 3) Compteurs ------------------------------------------------------
-  // found = somme des offres brutes : ATS(1) + webA(1) + webB(2) + boom(0) + excluded(1) = 5
-  assert.equal(summary.found, 5, "found = somme des offres brutes renvoyées");
+  // found = somme des offres brutes :
+  //   ATS(1) + webA(1) + webB(2) + boom(0) + excluded(1) + freshness(2) = 7
+  assert.equal(summary.found, 7, "found = somme des offres brutes renvoyées");
 
   // perSource : nb brut par source (boom = 0 après best-effort).
   assert.equal(summary.perSource.fakeats, 1);
@@ -155,11 +191,13 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
   assert.equal(summary.perSource.webb, 2);
   assert.equal(summary.perSource.boom, 0, "source en échec comptée 0 (best-effort)");
   assert.equal(summary.perSource.excluded, 1);
+  assert.equal(summary.perSource.freshness, 2);
 
   // newCount = offres uniques retenues après dédup + filtre :
-  //   ATS(1) + dup(1, gardée une fois) + uniqueB(1) = 3 ; l'offre "Stagiaire" est filtrée.
-  assert.equal(summary.newCount, 3, "newCount = uniques retenues après dédup+filtre");
-  assert.equal(summary.retained, 3, "retained = taille du Map de candidats");
+  //   ATS(1) + dup(1, gardée une fois) + uniqueB(1) + Recent(1) = 4.
+  //   Filtrées : "Stagiaire" (exclude) et "Old" (ancienneté > 7 j).
+  assert.equal(summary.newCount, 4, "newCount = uniques retenues après dédup+filtre");
+  assert.equal(summary.retained, 4, "retained = taille du Map de candidats");
 
   // --- 2) Dédup inter-sources -------------------------------------------
   assert.ok(summary.duplicates >= 1, "au moins un doublon inter-sources détecté");
@@ -169,14 +207,16 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
 
   // --- 5) Persistance : lecture de la base temp --------------------------
   const offers = listOffers("all", "recent");
-  assert.equal(offers.length, 3, "3 offres persistées en base");
+  assert.equal(offers.length, 4, "4 offres persistées en base");
   const titles = offers.map((o) => o.title).sort();
   assert.deepEqual(
     titles,
-    ["Data engineer ATS", "Data engineer Dup", "Data engineer Unique B"].sort(),
+    ["Data engineer ATS", "Data engineer Dup", "Data engineer Recent", "Data engineer Unique B"].sort(),
   );
   // L'offre "Stagiaire …" (filtrée) n'est PAS en base.
   assert.ok(!titles.includes("Stagiaire Data engineer"), "offre exclue absente de la base");
+  // L'offre "… Old" (trop ancienne) n'est PAS en base (filtre d'ancienneté).
+  assert.ok(!titles.includes("Data engineer Old"), "offre trop ancienne absente de la base");
   // L'offre dupliquée n'apparaît qu'une fois.
   assert.equal(
     offers.filter((o) => o.title === "Data engineer Dup").length,
@@ -187,5 +227,5 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
   // --- Le dernier run reflète les compteurs (insertRun a lieu dans main(),
   //     pas dans runPipeline) : on vérifie au moins que getStats lit la base temp.
   const stats = getStats();
-  assert.equal(stats.bySource.reduce((n, s) => n + s.count, 0), 3, "stats par source = 3 offres");
+  assert.equal(stats.bySource.reduce((n, s) => n + s.count, 0), 4, "stats par source = 4 offres");
 });

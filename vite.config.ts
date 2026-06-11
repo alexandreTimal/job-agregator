@@ -7,7 +7,7 @@ import { resolve } from "node:path";
  * Config Vite pour l'UI locale (dossier `web/`).
  *
  * Projet perso : pas de serveur de dev Vite. On build seulement ; c'est Fastify
- * qui sert le résultat (`web/dist`) + l'API sur le port 3000 (`npm run start`).
+ * qui sert le résultat (`web/dist`) + l'API sur le port 5627 (`npm run start`).
  *
  * - `root` = web/ (index.html y vit).
  * - Build émis dans `web/dist`.

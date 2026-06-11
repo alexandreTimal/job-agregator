@@ -18,6 +18,7 @@ import {
   TriangleAlert,
   Check,
   Save,
+  CalendarClock,
 } from "lucide-react";
 import type { Settings } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
@@ -125,6 +126,8 @@ export default function Settings() {
   const [newTerm, setNewTerm] = useState("");
   /** Saisie en cours du champ « Ajouter un board », indexée par nom de source ATS. */
   const [boardDrafts, setBoardDrafts] = useState<Record<string, string>>({});
+  /** Brouillon string du champ ancienneté (autorise un champ vide pendant l'édition). */
+  const [ageDraft, setAgeDraft] = useState("");
   /** Vrai dès qu'une modification non sauvegardée existe (évite un message trompeur au 1er chargement). */
   const [dirty, setDirty] = useState(false);
   /** Pour rendre le focus au champ d'ajout après suppression d'un chip de terme. */
@@ -136,8 +139,10 @@ export default function Settings() {
     apiClient
       .getSettings()
       .then((s) => {
-        if (!cancelled)
+        if (!cancelled) {
           setSettings({ ...s, terms: dedupeTerms(s.terms), atsBoards: s.atsBoards ?? {} });
+          setAgeDraft(String(s.maxOfferAgeDays));
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -212,6 +217,20 @@ export default function Settings() {
       ...settings,
       atsBoards: { ...settings.atsBoards, [source]: current.filter((_, i) => i !== index) },
     });
+  }
+
+  /**
+   * Met à jour l'ancienneté max depuis la saisie brute. On garde un brouillon
+   * `string` distinct pour autoriser un champ visuellement VIDE pendant l'édition
+   * (vider pour retaper ne doit pas claquer la valeur à 0 sous les doigts). Une
+   * saisie vide / invalide / ≤ 0 vaut 0 = sans limite ; sinon entier de jours.
+   */
+  function onAgeChange(raw: string): void {
+    setAgeDraft(raw);
+    if (!settings) return;
+    const n = raw.trim() === "" ? 0 : Number(raw);
+    const next = Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+    patch({ ...settings, maxOfferAgeDays: next });
   }
 
   function toggleSource(name: string): void {
@@ -365,6 +384,33 @@ export default function Settings() {
             );
           })}
         </div>
+      </Card>
+
+      {/* --- Ancienneté max ------------------------------------------- */}
+      <Card className="animate-rise p-6">
+        <SectionTitle
+          id="settings-age-heading"
+          icon={<CalendarClock />}
+          title="Ancienneté"
+          hint="Âge maximum de mise en ligne d'une offre pour être retenue au fetch."
+        />
+        <div role="group" aria-labelledby="settings-age-heading" className="flex items-center gap-3">
+          <Input
+            type="number"
+            min={0}
+            step={1}
+            inputMode="numeric"
+            aria-label="Ancienneté maximale, en jours"
+            value={ageDraft}
+            onChange={(e) => onAgeChange(e.target.value)}
+            className="w-24 font-[family-name:var(--font-mono)]"
+          />
+          <span className="text-sm text-[var(--color-ink-soft)]">jours</span>
+        </div>
+        <p className="mt-3 text-[0.8rem] text-[var(--color-ink-mute)]">
+          0 = aucune limite : toutes les offres sont retenues quelle que soit leur date de
+          publication.
+        </p>
       </Card>
 
       {/* --- Sources actives ------------------------------------------ */}

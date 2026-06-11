@@ -173,6 +173,7 @@ async function main(): Promise<void> {
     ...config,
     terms: settings.terms,
     contractTypes: settings.contractTypes,
+    maxOfferAgeDays: settings.maxOfferAgeDays,
   };
 
   logger.info("Démarrage", {
@@ -203,7 +204,9 @@ async function main(): Promise<void> {
     });
   }
 
-  emit({ type: "done", message: "run terminé" });
+  // Le terminal porte les compteurs : le serveur (scheduler) s'en sert pour la
+  // notification bureau « N nouvelles offres », sans relire la base.
+  emit({ type: "done", message: "run terminé", newOffers: summary.newCount, found: summary.found });
   closeDb();
 }
 

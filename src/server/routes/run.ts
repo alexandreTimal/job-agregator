@@ -76,6 +76,14 @@ class RunManager {
    */
   private killTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * Rappel optionnel invoqué UNE FOIS à la fin du run courant (terminal
+   * done/error), avec l'événement terminal. Posé par un déclencheur programmatique
+   * (`triggerRun`, ex. le scheduler) pour notifier le bureau ; absent pour les
+   * runs déclenchés via POST /api/run.
+   */
+  private onComplete: ((event: RunEvent) => void) | null = null;
+
   /** Un run est-il en cours d'exécution ? (verrou du POST /api/run) */
   get running(): boolean {
     return this.child !== null;
@@ -122,13 +130,14 @@ class RunManager {
    * Démarre un run si aucun n'est en cours. Renvoie false si le verrou est déjà
    * pris (le caller répondra alors 423).
    */
-  start(): boolean {
+  start(onComplete?: (event: RunEvent) => void): boolean {
     if (this.running) return false;
 
     // Nouveau run : on repart d'un journal vierge et d'un état non terminé.
     this.eventLog = [];
     this.terminated = false;
     this.canceling = false;
+    this.onComplete = onComplete ?? null;
 
     // `detached: true` fait du sous-process un LEADER de groupe : son PID est
     // aussi le PGID. À l'annulation on signale tout le groupe (`-pid`) pour tuer
@@ -271,10 +280,31 @@ class RunManager {
       reply.raw.end();
     }
     this.subscribers.clear();
+
+    // Notifie le déclencheur programmatique (scheduler) une seule fois, en
+    // best-effort : une notif qui échoue ne doit pas affecter le run.
+    const cb = this.onComplete;
+    this.onComplete = null;
+    if (cb) {
+      try {
+        cb(event);
+      } catch {
+        /* best-effort : on ignore toute erreur du rappel */
+      }
+    }
   }
 }
 
 const manager = new RunManager();
+
+/**
+ * Déclenche un run par programme (hors HTTP), en réutilisant le verrou partagé.
+ * Renvoie false si un run est déjà en cours. `onComplete` est invoqué à la fin
+ * du run avec l'événement terminal (done/error). Utilisé par le scheduler.
+ */
+export function triggerRun(onComplete?: (event: RunEvent) => void): boolean {
+  return manager.start(onComplete);
+}
 
 export async function registerRunRoutes(app: FastifyInstance): Promise<void> {
   // Déclenche un run (202) ou refuse si un run est déjà en cours (423).
