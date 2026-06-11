@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGuestSearchUrl, cleanJobUrl } from "./linkedin";
+import { buildGuestSearchUrl, cleanJobUrl, classifyZeroCards } from "./linkedin";
 
 test("buildGuestSearchUrl : encode keyword + location + start", () => {
   const url = buildGuestSearchUrl("data engineer", "Paris", 0);
@@ -41,4 +41,20 @@ test("cleanJobUrl : href relatif est préfixé par l'origine LinkedIn", () => {
 
 test("cleanJobUrl : href invalide → chaîne d'origine (best-effort)", () => {
   assert.equal(cleanJobUrl(""), "");
+});
+
+test("classifyZeroCards : statut non-2xx → blocked", () => {
+  assert.equal(classifyZeroCards({ status: 429, bodyTextLength: 0 }), "blocked");
+  assert.equal(classifyZeroCards({ status: 403, bodyTextLength: 5000 }), "blocked");
+  assert.equal(classifyZeroCards({ status: 999, bodyTextLength: 0 }), "blocked");
+  assert.equal(classifyZeroCards({ status: null, bodyTextLength: 0 }), "blocked");
+});
+test("classifyZeroCards : 2xx + body vide → empty (recherche sans résultat)", () => {
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 0 }), "empty");
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 10 }), "empty");
+  assert.equal(classifyZeroCards({ status: 204, bodyTextLength: 0 }), "empty");
+});
+test("classifyZeroCards : 2xx + body plein mais 0 carte → selector (sélecteur cassé)", () => {
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 5000 }), "selector");
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 33 }), "selector");
 });
