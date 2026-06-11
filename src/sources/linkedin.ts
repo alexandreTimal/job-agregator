@@ -58,9 +58,12 @@ async function scrapePage(
 
   // L'endpoint rend un fragment statique : les cartes sont présentes au
   // domcontentloaded. On tente une courte attente du sélecteur, sans bloquer.
+  // On ne consomme pas le résultat de `waitForSelector` : on s'appuie
+  // volontairement sur le check `diag.cardCount === 0` en aval (WARN +
+  // captureFailure) pour diagnostiquer un sélecteur cassé / un rate-limit.
   await page
     .waitForSelector(CARD_SELECTOR, { timeout: 8_000 })
-    .catch(() => false);
+    .catch(() => {});
 
   // Le parsing se fait DANS le contexte navigateur, au plus près du DOM, puis
   // remonte sous forme de diagnostic structuré.
@@ -150,6 +153,10 @@ export const linkedinSource: ScrapingSource = {
     const location = options?.filters?.locations?.[0]?.label ?? "";
 
     const browser = await launchBrowser();
+    // Abort de l'orchestrateur (timeout/échec) : on ferme le navigateur sans
+    // attendre la résolution de la promesse de fetch (les opérations Playwright
+    // en cours lèveront → catch → []). Le `finally` ci-dessous reste : le double
+    // close Playwright est sans danger.
     options?.signal?.addEventListener("abort", () => {
       browser.close().catch(() => {});
     });
