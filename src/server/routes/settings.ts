@@ -20,6 +20,19 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
+/** Vrai si `value` est un Record<string, string[]> (ou absent → {} en aval). */
+function parseAtsBoards(value: unknown): Record<string, string[]> | null {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const out: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (!isStringArray(v)) return null;
+    const seen = new Set<string>();
+    out[k] = v.map((s) => s.trim()).filter((s) => s.length > 0 && !seen.has(s) && seen.add(s));
+  }
+  return out;
+}
+
 /**
  * Valide le corps de PUT /api/settings et renvoie un objet `Settings` propre,
  * ou null si le corps est mal formé. On dédoublonne et on nettoie les chaînes.
@@ -31,6 +44,9 @@ function parseSettingsBody(body: unknown): Settings | null {
   if (!isStringArray(candidate.terms)) return null;
   if (!isStringArray(candidate.contractTypes)) return null;
   if (!isStringArray(candidate.enabledSources)) return null;
+
+  const atsBoards = parseAtsBoards(candidate.atsBoards);
+  if (atsBoards === null) return null;
 
   // contractTypes : uniquement "stage" et "CDI".
   if (!candidate.contractTypes.every((t) => CONTRACT_TYPES.has(t))) return null;
@@ -51,6 +67,7 @@ function parseSettingsBody(body: unknown): Settings | null {
     terms: clean(candidate.terms),
     contractTypes: clean(candidate.contractTypes),
     enabledSources: clean(candidate.enabledSources),
+    atsBoards,
   };
 }
 

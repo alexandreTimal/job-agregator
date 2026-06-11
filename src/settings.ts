@@ -19,6 +19,7 @@ import { sources } from "./sources/registry";
 const KEY_TERMS = "terms";
 const KEY_CONTRACT_TYPES = "contractTypes";
 const KEY_ENABLED_SOURCES = "enabledSources";
+const KEY_ATS_BOARDS = "atsBoards";
 
 function parseList(raw: string | undefined, fallback: string[]): string[] {
   if (raw === undefined) return fallback;
@@ -31,12 +32,30 @@ function parseList(raw: string | undefined, fallback: string[]): string[] {
   }
 }
 
+function parseRecord(raw: string | undefined): Record<string, string[]> {
+  if (raw === undefined) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (Array.isArray(v)) {
+        out[k] = v.map((x) => String(x).trim()).filter((x) => x.length > 0);
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /** Valeurs de seed initial dérivées de la config statique + du registry. */
 function seedValues(): Settings {
   return {
     terms: config.terms,
     contractTypes: config.contractTypes ?? ["CDI"],
     enabledSources: sources.map((s) => s.name),
+    atsBoards: {},
   };
 }
 
@@ -55,6 +74,7 @@ export function getSettings(): Settings {
     terms: parseList(raw[KEY_TERMS], seed.terms),
     contractTypes: parseList(raw[KEY_CONTRACT_TYPES], seed.contractTypes),
     enabledSources: parseList(raw[KEY_ENABLED_SOURCES], seed.enabledSources),
+    atsBoards: parseRecord(raw[KEY_ATS_BOARDS]),
   };
 }
 
@@ -63,4 +83,5 @@ export function setSettings(settings: Settings): void {
   setSettingRaw(KEY_TERMS, JSON.stringify(settings.terms));
   setSettingRaw(KEY_CONTRACT_TYPES, JSON.stringify(settings.contractTypes));
   setSettingRaw(KEY_ENABLED_SOURCES, JSON.stringify(settings.enabledSources));
+  setSettingRaw(KEY_ATS_BOARDS, JSON.stringify(settings.atsBoards));
 }

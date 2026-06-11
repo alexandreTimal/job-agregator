@@ -63,9 +63,13 @@ Réponse `200` : `Settings`
 {
   "terms": ["data engineer"],
   "contractTypes": ["CDI"],
-  "enabledSources": ["wttj", "hellowork"]
+  "enabledSources": ["wttj", "hellowork"],
+  "atsBoards": { "greenhouse": ["stripe"], "lever": ["swile"] }
 }
 ```
+
+- `atsBoards` : Record de tokens d'entreprise par source ATS (`greenhouse`,
+  `lever`). Optionnel en PUT (absent → `{}` par défaut).
 
 ### PUT /api/settings
 

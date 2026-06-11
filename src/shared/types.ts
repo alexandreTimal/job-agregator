@@ -43,11 +43,14 @@ export type OfferSort = "recent" | "score";
  *
  * - `contractTypes` : valeurs possibles "stage" et "CDI".
  * - `enabledSources`: noms des sources actives (cf. registry des sources).
+ * - `atsBoards`     : pour chaque source ATS (greenhouse, lever), la liste des
+ *                     tokens d'entreprise à interroger. Ex. `{ greenhouse: ["stripe"] }`.
  */
 export interface Settings {
   terms: string[];
   contractTypes: string[];
   enabledSources: string[];
+  atsBoards: Record<string, string[]>;
 }
 
 /** Comptage d'offres par source, avec le chemin du logo local. */
