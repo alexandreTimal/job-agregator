@@ -66,6 +66,11 @@ const EMPTY_BODY_MAX = 32;
  * - `"selector"` : 2xx + body plein mais 0 carte → la page a du contenu mais aucun
  *   nœud ne matche `CARD_SELECTOR` : sélecteur probablement cassé. À capturer.
  *
+ * Limite connue : un challenge anti-bot servi en HTTP 200 avec un body riche
+ * (interstitiel « Verify you're human ») retombe dans `"selector"` — le WARN
+ * pointera alors à tort un sélecteur sain. La capture étant déclenchée dans les
+ * deux cas (verdict ≠ `empty`), l'artefact HTML/PNG permet de lever le doute.
+ *
  * Fonction pure.
  */
 export function classifyZeroCards(input: {
@@ -240,7 +245,8 @@ export const linkedinSource: ScrapingSource = {
             } else {
               // blocked (non-2xx / pas de réponse) OU selector (page pleine, 0 carte = sélecteur cassé).
               // Capture seulement en page 1 pour ne pas spammer data/debug à chaque page.
-              const artefacts = p === 1 ? await captureFailure(page, "linkedin", "zero-cards") : null;
+              const shouldCapture = p === 1;
+              const artefacts = shouldCapture ? await captureFailure(page, "linkedin", "zero-cards") : null;
               logger.warn(
                 verdict === "blocked"
                   ? "0 carte — blocage probable (rate-limit ou réponse non-2xx)"
@@ -253,7 +259,7 @@ export const linkedinSource: ScrapingSource = {
                   status,
                   capture: artefacts
                     ? `${artefacts}.html / .png`
-                    : p === 1
+                    : shouldCapture
                       ? "échec capture"
                       : "non capturé (page>1)",
                 },
