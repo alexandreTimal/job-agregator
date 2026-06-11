@@ -67,6 +67,7 @@ const MOCK_SETTINGS: Settings = {
   terms: ["data engineer", "machine learning engineer"],
   contractTypes: ["CDI"],
   enabledSources: ["wttj", "hellowork"],
+  atsBoards: { greenhouse: ["stripe"], lever: ["swile"] },
 };
 
 const MOCK_RUNS: Run[] = [

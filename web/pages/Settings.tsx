@@ -40,9 +40,11 @@ const CONTRACT_TYPES = [
  * Une source présente dans `settings.enabledSources` mais absente du catalogue
  * reste affichée (cf. `sourceCatalog` plus bas) pour ne jamais la "perdre".
  */
-const KNOWN_SOURCES: { name: string; label: string }[] = [
+const KNOWN_SOURCES: { name: string; label: string; ats?: boolean }[] = [
   { name: "wttj", label: "Welcome to the Jungle" },
   { name: "hellowork", label: "HelloWork" },
+  { name: "greenhouse", label: "Greenhouse (pages carrières)", ats: true },
+  { name: "lever", label: "Lever (pages carrières)", ats: true },
 ];
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -120,6 +122,8 @@ export default function Settings() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [newTerm, setNewTerm] = useState("");
+  /** Saisie en cours du champ « Ajouter un board », indexée par nom de source ATS. */
+  const [boardDrafts, setBoardDrafts] = useState<Record<string, string>>({});
   /** Vrai dès qu'une modification non sauvegardée existe (évite un message trompeur au 1er chargement). */
   const [dirty, setDirty] = useState(false);
   /** Pour rendre le focus au champ d'ajout après suppression d'un chip de terme. */
@@ -131,7 +135,8 @@ export default function Settings() {
     apiClient
       .getSettings()
       .then((s) => {
-        if (!cancelled) setSettings({ ...s, terms: dedupeTerms(s.terms) });
+        if (!cancelled)
+          setSettings({ ...s, terms: dedupeTerms(s.terms), atsBoards: s.atsBoards ?? {} });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -185,6 +190,27 @@ export default function Settings() {
       ? settings.contractTypes.filter((c) => c !== value)
       : [...settings.contractTypes, value];
     patch({ ...settings, contractTypes });
+  }
+
+  function addBoard(source: string, raw: string): void {
+    if (!settings) return;
+    const token = raw.trim();
+    if (!token) return;
+    const current = settings.atsBoards[source] ?? [];
+    if (current.some((b) => b.toLowerCase() === token.toLowerCase())) return;
+    patch({
+      ...settings,
+      atsBoards: { ...settings.atsBoards, [source]: [...current, token] },
+    });
+  }
+
+  function removeBoard(source: string, index: number): void {
+    if (!settings) return;
+    const current = settings.atsBoards[source] ?? [];
+    patch({
+      ...settings,
+      atsBoards: { ...settings.atsBoards, [source]: current.filter((_, i) => i !== index) },
+    });
   }
 
   function toggleSource(name: string): void {
@@ -351,19 +377,90 @@ export default function Settings() {
         <div
           role="group"
           aria-labelledby="settings-sources-heading"
-          className="grid gap-2.5 sm:grid-cols-2"
+          className="flex flex-col gap-2.5"
         >
           {sourceCatalog.map((src) => {
             const active = settings.enabledSources.includes(src.name);
+            const isAts = KNOWN_SOURCES.find((k) => k.name === src.name)?.ats === true;
+            const boards = settings.atsBoards[src.name] ?? [];
             return (
-              <ToggleRow
-                key={src.name}
-                active={active}
-                onToggle={() => toggleSource(src.name)}
-                title={src.label}
-                hint={src.name}
-                leading={<SourceLogo source={src.name} />}
-              />
+              <div key={src.name} className="flex flex-col gap-2.5">
+                <ToggleRow
+                  active={active}
+                  onToggle={() => toggleSource(src.name)}
+                  title={src.label}
+                  hint={src.name}
+                  leading={<SourceLogo source={src.name} />}
+                />
+                {isAts && active && (
+                  <div
+                    role="group"
+                    aria-label={`Boards ${src.label}`}
+                    className="ml-3 flex flex-col gap-3 rounded-[var(--radius-md)] border border-[var(--color-line)] border-l-2 border-l-[var(--color-signal)]/40 bg-black/20 p-4"
+                  >
+                    {boards.length === 0 ? (
+                      <p className="text-sm italic text-[var(--color-ink-mute)]">
+                        Aucun board. Ajoutez un identifiant d'entreprise ci-dessous.
+                      </p>
+                    ) : (
+                      <ul className="flex flex-wrap gap-2">
+                        {boards.map((board, index) => (
+                          <li
+                            key={`${index}-${board}`}
+                            className="group inline-flex items-center gap-2 rounded-full border border-[var(--color-line-strong)] bg-black/25 py-1.5 pl-3.5 pr-1.5 text-sm text-[var(--color-ink-soft)] transition-colors hover:border-[var(--color-signal)]/40"
+                          >
+                            <span className="font-[family-name:var(--font-mono)] text-[0.8rem]">
+                              {board}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={`Retirer le board « ${board} »`}
+                              onClick={() => removeBoard(src.name, index)}
+                              className="grid size-6 place-items-center rounded-full text-[var(--color-ink-mute)] transition-colors hover:bg-[var(--color-danger)]/15 hover:text-[var(--color-danger)]"
+                            >
+                              <X aria-hidden="true" className="size-3.5" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    <form
+                      className="flex gap-2"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        addBoard(src.name, boardDrafts[src.name] ?? "");
+                        setBoardDrafts((d) => ({ ...d, [src.name]: "" }));
+                      }}
+                    >
+                      <Input
+                        type="text"
+                        aria-label={`Ajouter un board ${src.label}`}
+                        value={boardDrafts[src.name] ?? ""}
+                        placeholder="ex. stripe"
+                        onChange={(e) =>
+                          setBoardDrafts((d) => ({ ...d, [src.name]: e.target.value }))
+                        }
+                        className="flex-1"
+                      />
+                      <Button
+                        type="submit"
+                        variant="signal"
+                        size="sm"
+                        disabled={!(boardDrafts[src.name] ?? "").trim()}
+                      >
+                        <Plus aria-hidden="true" className="size-4" />
+                        Ajouter
+                      </Button>
+                    </form>
+
+                    <p className="text-[0.8rem] text-[var(--color-ink-mute)]">
+                      Le board est l'identifiant d'entreprise de l'ATS — ex. «&nbsp;stripe&nbsp;»
+                      pour <span className="font-[family-name:var(--font-mono)]">boards.greenhouse.io/…/stripe</span>.
+                    </p>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
