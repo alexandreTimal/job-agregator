@@ -31,7 +31,10 @@ const PUBLIC_DIR = resolve(PROJECT_ROOT, "public");
 const WEB_DIST_DIR = resolve(PROJECT_ROOT, "web/dist");
 
 export async function buildServer() {
-  const app = Fastify({ logger: true });
+  // `disableRequestLogging` coupe les lignes auto « incoming request » /
+  // « request completed » (très bruyantes, surtout les 304 du polling SSE)
+  // tout en gardant le logger pour les vrais logs métier/erreurs.
+  const app = Fastify({ logger: true, disableRequestLogging: true });
 
   // Base sqlite prête (schéma + seed initial des settings).
   initDb();
