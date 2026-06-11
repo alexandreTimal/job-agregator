@@ -195,6 +195,12 @@ export function listOffers(filter: OfferFilter, sort: OfferSort): Offer[] {
   return rows.map(rowToOffer);
 }
 
+/** Une offre d'identifiant numérique donné existe-t-elle en base (deleted compris) ? */
+export function offerExistsById(id: number): boolean {
+  const row = getDb().prepare(`SELECT 1 FROM seen_offers WHERE id = ?`).get(id);
+  return row !== undefined;
+}
+
 export function setLiked(id: number, liked: boolean): void {
   getDb().prepare(`UPDATE seen_offers SET liked = ? WHERE id = ?`).run(liked ? 1 : 0, id);
 }

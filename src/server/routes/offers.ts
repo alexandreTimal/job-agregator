@@ -10,19 +10,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import type { OfferFilter, OfferSort } from "../../shared/types";
-import { getDb, listOffers, setLiked, setDeleted } from "../../store/sqlite";
-
-/**
- * Une offre d'identifiant donné existe-t-elle en base (deleted compris) ?
- *
- * On lit directement via le handle `getDb()` exporté par le store : la table
- * `seen_offers` n'expose pas (encore) de helper « existe par id », et le
- * périmètre de cette lane interdit de modifier `src/store/sqlite.ts`.
- */
-function offerExistsById(id: number): boolean {
-  const row = getDb().prepare(`SELECT 1 FROM seen_offers WHERE id = ?`).get(id);
-  return row !== undefined;
-}
+import { offerExistsById, listOffers, setLiked, setDeleted } from "../../store/sqlite";
 
 /** Normalise le query param `filter` (défaut : `all`). */
 function parseFilter(value: unknown): OfferFilter {

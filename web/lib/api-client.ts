@@ -160,14 +160,29 @@ export const apiClient = {
       return () => timers.forEach(clearTimeout);
     }
     const es = new EventSource(`/api/run/stream`);
+    // Vrai quand un événement terminal (done/error) a déjà été reçu : on ne veut
+    // pas qu'un `onerror` déclenché par la fermeture normale du flux par le
+    // serveur (juste après `done`) soit interprété comme une erreur.
+    let termine = false;
     es.onmessage = (msg) => {
       try {
-        onEvent(JSON.parse(msg.data) as RunEvent);
+        const event = JSON.parse(msg.data) as RunEvent;
+        if (event.type === "done" || event.type === "error") termine = true;
+        onEvent(event);
       } catch {
         /* ignore les messages non JSON */
       }
     };
-    es.onerror = () => es.close();
+    es.onerror = () => {
+      // Coupure AVANT tout terminal (process tué, serveur crashé) : on remonte
+      // un événement `error` pour que l'appelant réarme aussitôt, au lieu de
+      // rester silencieux et de dépendre du chien de garde côté UI.
+      if (!termine) {
+        termine = true;
+        onEvent({ type: "error", message: "connexion au flux de progression interrompue" });
+      }
+      es.close();
+    };
     return () => es.close();
   },
 };
