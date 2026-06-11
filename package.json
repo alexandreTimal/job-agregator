@@ -8,7 +8,7 @@
     "fetch": "tsx src/index.ts",
     "fetch:dry": "tsx src/index.ts --dry-run",
     "dev": "concurrently -n server,web -c blue,green \"npm run dev:server\" \"npm run dev:web\"",
-    "dev:server": "tsx watch src/server/index.ts",
+    "dev:server": "PORT=3001 tsx watch src/server/index.ts",
     "dev:web": "vite",
     "build": "vite build",
     "start": "tsx src/server/index.ts",

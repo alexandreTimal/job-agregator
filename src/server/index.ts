@@ -21,7 +21,9 @@ import { initDb } from "../store/sqlite";
 import { seedSettingsIfEmpty } from "../settings";
 
 const HOST = "127.0.0.1";
-const PORT = Number(process.env.PORT ?? 5174);
+// 3000 par défaut (mode `npm run start`, site servi par Fastify). En dev, le
+// script `dev:server` force PORT=3001 pour laisser le 3000 à Vite (HMR).
+const PORT = Number(process.env.PORT ?? 3000);
 
 const __dirname = resolve(fileURLToPath(import.meta.url), "..");
 const PROJECT_ROOT = resolve(__dirname, "../..");
