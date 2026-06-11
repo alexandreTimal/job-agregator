@@ -1,5 +1,6 @@
 import type { RawJobOffer, Priority } from "./lib/types";
 import { normalizeText } from "./lib/normalize";
+import { classifyContractType } from "./lib/contract-type";
 import type { SearchConfig } from "../config/search.config";
 
 export interface FilterVerdict {
@@ -12,9 +13,11 @@ const MS_PER_DAY = 86_400_000;
 
 /**
  * Filtre 100 % déterministe. Pur : aucune I/O, aucun réseau, aucun LLM.
- * Politique « lenient » : un champ absent (salaire/lieu/contrat/date null) ne
- * disqualifie jamais — on ne rejette que sur une information présente qui
- * contredit la config.
+ * Politique « lenient » pour salaire/lieu/date : un champ absent ne disqualifie
+ * jamais. Le **type de contrat** fait exception : il est toujours tranché par
+ * `classifyContractType` (binaire stage/CDI, sur le titre quand la source laisse
+ * `contractType` null, ex. LinkedIn), donc une offre du mauvais contrat EST
+ * rejetée même sans valeur brute — sinon « stage » ne serait pas sélectionnable.
  *
  * `now` est injecté (défaut `Date.now()`) pour garder la fonction pure et
  * testable malgré le critère d'ancienneté.
@@ -26,29 +29,37 @@ export function passesFilters(
 ): FilterVerdict {
   const haystack = normalizeText(`${offer.title} ${offer.company ?? ""}`);
 
-  // Les types de contrat sélectionnés (ex. "stage", "CDI") font autorité : un
-  // terme d'exclusion qui désigne un contrat explicitement choisi ne doit jamais
-  // disqualifier l'offre (sinon "stage" ne serait pas réellement sélectionnable).
-  const selectedContracts = new Set(
-    (config.contractTypes ?? []).map((c) => normalizeText(c)).filter(Boolean),
+  // Familles de contrat sélectionnées (binaire stage/CDI via classifyContractType).
+  // Sert au filtre (2) ET à neutraliser les exclusions « famille stage ».
+  const selectedClasses = new Set(
+    (config.contractTypes ?? []).map((c) => classifyContractType(c)),
   );
 
   // 1) Mots-clés d'exclusion (titre + entreprise)
   for (const term of config.exclude ?? []) {
     const needle = normalizeText(term);
     if (!needle) continue;
-    // On ignore un terme d'exclusion qui coïncide avec un contrat sélectionné.
-    if (selectedContracts.has(needle)) continue;
+    // Un terme d'exclusion qui SIGNALE un stage (stage/stagiaire/alternance/
+    // apprentissage…) ne doit pas disqualifier quand « stage » est sélectionné —
+    // sinon ces libellés de search.config.ts tueraient les offres voulues.
+    // On ne neutralise QUE la famille stage : classifyContractType ne renvoie
+    // "stage" que sur un vrai signal (jamais par défaut), donc un terme métier
+    // ("senior", "manager") reste bien exclu même quand « CDI » est sélectionné.
+    if (selectedClasses.has("stage") && classifyContractType(term) === "stage") continue;
     if (haystack.includes(needle)) {
       return { passed: false, reason: `exclu:${term}` };
     }
   }
 
-  // 2) Type de contrat (lenient si null)
-  if (config.contractTypes?.length && offer.contractType) {
-    const oc = normalizeText(offer.contractType);
-    const ok = config.contractTypes.some((c) => oc.includes(normalizeText(c)));
-    if (!ok) return { passed: false, reason: `contrat:${offer.contractType}` };
+  // 2) Type de contrat — classification déterministe (stage vs CDI). Tranche même
+  // sans valeur brute : LinkedIn/Greenhouse laissent contractType null, on classe
+  // alors sur le titre. (La recherche LinkedIn est en plus contrainte en amont via
+  // f_JT ; ce filtre rattrape les CDI qui fuient malgré tout.)
+  if (config.contractTypes?.length) {
+    const cls = classifyContractType(offer.title, offer.contractType);
+    if (!selectedClasses.has(cls)) {
+      return { passed: false, reason: `contrat:${cls}` };
+    }
   }
 
   // 3) Salaire minimum (lenient si non parsable / absent)

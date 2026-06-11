@@ -315,6 +315,13 @@ export async function registerRunRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(202).send({ ok: true });
   });
 
+  // État du run courant : permet à l'UI, après un changement de page (la page
+  // Offres et son RunButton sont démontés), de savoir s'il faut se reconnecter
+  // au flux SSE pour reprendre le suivi d'un run toujours en cours.
+  app.get("/api/run/status", async (_request, reply) => {
+    return reply.send({ running: manager.running });
+  });
+
   // Annule le run en cours (202) ou refuse si aucun run ne tourne (409).
   app.post("/api/run/cancel", async (_request, reply) => {
     if (!manager.cancel()) {

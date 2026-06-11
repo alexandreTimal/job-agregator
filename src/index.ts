@@ -20,6 +20,7 @@ import type { ScrapingSource, SearchFilters } from "./lib/source-interface";
 import { getEnabledSources } from "./sources/registry";
 import { computeHash, normalizeText } from "./lib/normalize";
 import { passesFilters, scoreOffer } from "./filter";
+import { classifyContractType } from "./lib/contract-type";
 import { initDb, offerExists, insertOffer, insertRun, closeDb } from "./store/sqlite";
 import { getSettings } from "./settings";
 import { pLimit, withTimeout } from "./lib/concurrency";
@@ -31,8 +32,15 @@ const logger = createLogger("ORCHESTRATOR");
 
 /** Sources en parallèle (web = un seul navigateur/source, hôte jamais frappé 2× à la fois). */
 const SOURCE_CONCURRENCY = 4;
-/** Une source traite TOUS ses termes : timeout large. */
-const SOURCE_TIMEOUT_MS = 240_000;
+/**
+ * Une source traite TOUS ses termes ET toutes les villes (boucle villes × termes
+ * en interne, cf. `locationSlots`). Le temps d'une source web croît donc avec le
+ * nombre de villes : 2 villes × 19 termes dépassait l'ancien plafond de 240 s, et
+ * la source était abandonnée (→ 0 offre). 600 s couvre plusieurs villes. NB : à
+ * l'abort, les sources restituent désormais leur collecte partielle (filet de
+ * sécurité si ce budget est encore dépassé).
+ */
+const SOURCE_TIMEOUT_MS = 600_000;
 
 /** Émet un événement de progression sur stdout, relayé en SSE par le serveur. */
 function emit(event: RunEvent): void {
@@ -189,6 +197,7 @@ export async function runPipeline(
         source: offer.sourceName,
         score,
         publishedAt: offer.publishedAt ? offer.publishedAt.toISOString() : null,
+        contractType: classifyContractType(offer.title, offer.contractType),
       });
     }
   }

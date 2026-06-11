@@ -77,6 +77,18 @@ export interface SourceCount {
   logo: string;
 }
 
+/**
+ * Décompte étiqueté générique (répartitions par localisation / type de contrat).
+ *
+ * `label` peut être une valeur réelle (« Paris », « CDI ») ou un seau synthétique
+ * (« Autres », « Non précisé » pour les lieux). Le pourcentage est calculé côté
+ * UI sur le total, comme pour `SourceCount`.
+ */
+export interface LabeledCount {
+  label: string;
+  count: number;
+}
+
 /** Une ligne de la table `runs` (un lancement de pipeline). */
 export interface Run {
   id: number;
@@ -94,6 +106,10 @@ export interface Stats {
   week: number;
   duplicates: number;
   bySource: SourceCount[];
+  /** Répartition des offres par localisation (top N + « Autres » + « Non précisé »). */
+  byLocation: LabeledCount[];
+  /** Répartition des offres par type de contrat (« Stage » / « CDI »). */
+  byContract: LabeledCount[];
   lastRuns: Run[];
 }
 

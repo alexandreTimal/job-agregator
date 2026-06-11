@@ -3,6 +3,8 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Offer, OfferFilter, OfferSort, Run, Stats, SourceCount } from "../shared/types";
+import { classifyContractType } from "../lib/contract-type";
+import { aggregateLocations } from "../lib/stats-aggregate";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DB_PATH = resolve(__dirname, "../../data/job-agregator.db");
@@ -67,8 +69,29 @@ export function initDb(): Database.Database {
   ensureColumn(db, "liked", "liked BOOLEAN DEFAULT 0");
   ensureColumn(db, "deleted", "deleted BOOLEAN DEFAULT 0");
   ensureColumn(db, "published_at", "published_at DATETIME");
+  ensureColumn(db, "contract_type", "contract_type TEXT");
+
+  backfillContractTypes(db);
 
   return db;
+}
+
+/**
+ * Reclasse les lignes héritées (colonne `contract_type` ajoutée à NULL) en
+ * dérivant leur classe depuis le titre. Borné par `WHERE contract_type IS NULL`
+ * → sélectionne 0 ligne après le premier passage (les insertions renseignent
+ * désormais toujours la colonne), donc sans coût récurrent au démarrage.
+ */
+function backfillContractTypes(database: Database.Database): void {
+  const rows = database
+    .prepare(`SELECT id, title FROM seen_offers WHERE contract_type IS NULL`)
+    .all() as { id: number; title: string }[];
+  if (rows.length === 0) return;
+  const update = database.prepare(`UPDATE seen_offers SET contract_type = ? WHERE id = ?`);
+  const run = database.transaction((items: { id: number; title: string }[]) => {
+    for (const r of items) update.run(classifyContractType(r.title), r.id);
+  });
+  run(rows);
 }
 
 export function getDb(): Database.Database {
@@ -107,11 +130,12 @@ export function insertOffer(offer: {
   source: string;
   score: number;
   publishedAt?: string | null;
+  contractType?: string | null;
 }): void {
   getDb()
     .prepare(
-      `INSERT OR IGNORE INTO seen_offers (hash, title, company, location, url, source, score, published_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO seen_offers (hash, title, company, location, url, source, score, published_at, contract_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       offer.hash,
@@ -122,6 +146,7 @@ export function insertOffer(offer: {
       offer.source,
       offer.score,
       offer.publishedAt ?? null,
+      offer.contractType ?? null,
     );
 }
 
@@ -370,13 +395,38 @@ export function getStats(): Stats {
     logo: logoPath(r.source),
   }));
 
+  const byLocationRows = database
+    .prepare(
+      `SELECT location, COUNT(*) AS count FROM seen_offers
+       WHERE deleted = 0
+       GROUP BY location`,
+    )
+    .all() as { location: string | null; count: number }[];
+  const byLocation = aggregateLocations(byLocationRows);
+
+  // Les lignes sont reclassées au backfill + à l'insertion ; un `contract_type`
+  // résiduel NULL (théorique) est rangé en « CDI » via COALESCE pour rester binaire.
+  const byContractRows = database
+    .prepare(
+      `SELECT COALESCE(contract_type, 'CDI') AS contract_type, COUNT(*) AS count
+       FROM seen_offers
+       WHERE deleted = 0
+       GROUP BY COALESCE(contract_type, 'CDI')
+       ORDER BY count DESC`,
+    )
+    .all() as { contract_type: string; count: number }[];
+  const byContract = byContractRows.map((r) => ({
+    label: r.contract_type === "stage" ? "Stage" : "CDI",
+    count: r.count,
+  }));
+
   const lastRuns = (
     database
       .prepare(`SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT 10`)
       .all() as RunRow[]
   ).map(rowToRun);
 
-  return { today, week, duplicates, bySource, lastRuns };
+  return { today, week, duplicates, bySource, byLocation, byContract, lastRuns };
 }
 
 export function closeDb(): void {

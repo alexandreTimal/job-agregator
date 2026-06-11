@@ -64,3 +64,75 @@ test("filtre d'âge : date de publication absente => offre conservée (lenient)"
   const v = passesFilters(offer(null), ageConfig(7), NOW);
   assert.equal(v.passed, true);
 });
+
+// --- Filtre par type de contrat (classification déterministe stage/CDI) ---
+
+/** Offre au titre/contrat custom (le reste neutre, sans contrainte d'âge). */
+function contractOffer(title: string, raw: string | null = null): RawJobOffer {
+  return {
+    title,
+    company: "Acme",
+    location: null,
+    salary: null,
+    contractType: raw,
+    urlSource: "https://example.com/1",
+    sourceName: "test",
+    publishedAt: null,
+  };
+}
+
+/** Config contrat : `contractTypes` + `exclude` réaliste (cf. search.config). */
+function contractConfig(contractTypes: string[], exclude: string[] = []): SearchConfig {
+  return { terms: ["data engineer"], exclude, contractTypes };
+}
+
+test("contrat : stage demandé, contractType null (LinkedIn) — titre stage passe", () => {
+  const v = passesFilters(contractOffer("Stage Product Manager"), contractConfig(["stage"]), NOW);
+  assert.equal(v.passed, true);
+});
+
+test("contrat : stage demandé, contractType null — un CDI (titre non-stage) est REJETÉ", () => {
+  // C'est le bug d'origine : LinkedIn rend contractType null, le CDI passait.
+  const v = passesFilters(contractOffer("Senior Product Manager"), contractConfig(["stage"]), NOW);
+  assert.equal(v.passed, false);
+  assert.equal(v.reason, "contrat:CDI");
+});
+
+test("contrat : stage demandé — alternance/apprentissage classés stage passent", () => {
+  for (const t of ["Alternance - Product Manager (F/H)", "Apprenti Data Engineer"]) {
+    assert.equal(passesFilters(contractOffer(t), contractConfig(["stage"]), NOW).passed, true, t);
+  }
+});
+
+test("contrat : CDI demandé — un stage (titre) est rejeté", () => {
+  const v = passesFilters(contractOffer("Stagiaire Data Engineer"), contractConfig(["CDI"]), NOW);
+  assert.equal(v.passed, false);
+  assert.equal(v.reason, "contrat:stage");
+});
+
+test("contrat : contractType brut fait foi quand présent (WTTJ/Hellowork)", () => {
+  // Titre neutre mais contrat brut "CDI" → classé CDI → rejeté si on veut un stage.
+  const v = passesFilters(contractOffer("Data Engineer", "CDI"), contractConfig(["stage"]), NOW);
+  assert.equal(v.passed, false);
+});
+
+test("exclude : 'stagiaire'/'alternance' ne tuent PAS un stage quand stage est demandé", () => {
+  const cfg = contractConfig(["stage"], ["stage", "stagiaire", "alternance", "apprentissage"]);
+  assert.equal(passesFilters(contractOffer("Stagiaire Growth"), cfg, NOW).passed, true);
+  assert.equal(passesFilters(contractOffer("Alternance Growth"), cfg, NOW).passed, true);
+});
+
+test("exclude : un terme MÉTIER reste exclu même quand CDI est sélectionné", () => {
+  // Régression évitée : "senior" se classe CDI par défaut, mais ne doit pas être
+  // neutralisé — seule la famille stage l'est, et uniquement si stage est choisi.
+  const cfg = contractConfig(["CDI"], ["senior"]);
+  const v = passesFilters(contractOffer("Senior Data Engineer"), cfg, NOW);
+  assert.equal(v.passed, false);
+  assert.equal(v.reason, "exclu:senior");
+});
+
+test("contrat : sans contractTypes configuré → aucune contrainte de contrat", () => {
+  const cfg: SearchConfig = { terms: ["x"], exclude: [] };
+  assert.equal(passesFilters(contractOffer("Stage Whatever"), cfg, NOW).passed, true);
+  assert.equal(passesFilters(contractOffer("Senior Whatever"), cfg, NOW).passed, true);
+});

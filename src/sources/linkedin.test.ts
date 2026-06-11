@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGuestSearchUrl, cleanJobUrl, classifyZeroCards } from "./linkedin";
+import {
+  buildGuestSearchUrl,
+  cleanJobUrl,
+  classifyZeroCards,
+  contractTypesToJobTypes,
+} from "./linkedin";
 
 test("buildGuestSearchUrl : encode keyword + location + start", () => {
   const url = buildGuestSearchUrl("data engineer", "Paris", 0);
@@ -19,6 +24,34 @@ test("buildGuestSearchUrl : start incrémenté présent dans l'URL", () => {
 test("buildGuestSearchUrl : location vide → paramètre location omis", () => {
   const url = buildGuestSearchUrl("data engineer", "", 0);
   assert.equal(new URL(url).searchParams.has("location"), false);
+});
+
+test("buildGuestSearchUrl : jobTypes vide → f_JT omis (tous types)", () => {
+  const url = buildGuestSearchUrl("data engineer", "Paris", 0, []);
+  assert.equal(new URL(url).searchParams.has("f_JT"), false);
+});
+
+test("buildGuestSearchUrl : jobTypes → f_JT en liste séparée par virgules", () => {
+  const url = buildGuestSearchUrl("data engineer", "Paris", 0, ["I", "F"]);
+  assert.equal(new URL(url).searchParams.get("f_JT"), "I,F");
+});
+
+test("contractTypesToJobTypes : stage → I (Internship)", () => {
+  assert.deepEqual(contractTypesToJobTypes(["stage"]), ["I"]);
+});
+
+test("contractTypesToJobTypes : CDI → F (insensible à la casse/accents)", () => {
+  assert.deepEqual(contractTypesToJobTypes(["CDI"]), ["F"]);
+});
+
+test("contractTypesToJobTypes : stage + CDI → I et F (sans doublon)", () => {
+  assert.deepEqual(contractTypesToJobTypes(["stage", "CDI", "stage"]), ["I", "F"]);
+});
+
+test("contractTypesToJobTypes : type inconnu ignoré ; vide/undefined → []", () => {
+  assert.deepEqual(contractTypesToJobTypes(["freelance"]), []);
+  assert.deepEqual(contractTypesToJobTypes([]), []);
+  assert.deepEqual(contractTypesToJobTypes(undefined), []);
 });
 
 test("cleanJobUrl : strip des paramètres de tracking", () => {

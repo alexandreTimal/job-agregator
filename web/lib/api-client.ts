@@ -96,6 +96,16 @@ const MOCK_STATS: Stats = {
     { source: "wttj", count: 12, logo: "/logos/wttj.svg" },
     { source: "hellowork", count: 6, logo: "/logos/hellowork.svg" },
   ],
+  byLocation: [
+    { label: "Paris", count: 9 },
+    { label: "Lyon", count: 4 },
+    { label: "Autres", count: 3 },
+    { label: "Non précisé", count: 2 },
+  ],
+  byContract: [
+    { label: "CDI", count: 13 },
+    { label: "Stage", count: 5 },
+  ],
   lastRuns: MOCK_RUNS,
 };
 

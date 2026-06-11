@@ -6,6 +6,7 @@ import { createLogger } from "../lib/logger";
 import { ParseReport, finalizeOffers } from "../lib/parse-report";
 import type { RawScrapeResult, PageDiag } from "../lib/parse-report";
 import { captureFailure } from "../lib/debug-capture";
+import { normalizeText } from "../lib/normalize";
 
 const logger = createLogger("LINKEDIN");
 
@@ -18,13 +19,57 @@ const GUEST_SEARCH_PATH = "/jobs-guest/jobs/api/seeMoreJobPostings/search";
 const CARD_SELECTOR = "div.base-card";
 
 /**
- * Construit l'URL de l'endpoint guest pour un terme, une ville et un offset.
- * `location` vide ⇒ paramètre omis (recherche mondiale). Fonction pure.
+ * Codes `f_JT` (job type) de la recherche LinkedIn guest, par type de contrat.
+ *
+ * La carte guest LinkedIn n'expose PAS le type de contrat (contractType reste
+ * null) : le filtre déterministe aval ne peut donc pas trancher stage vs CDI
+ * (politique lenient → tout passe). On contraint la recherche EN AMONT via le
+ * paramètre serveur `f_JT`, exactement comme une source ATS émule la recherche
+ * serveur. Ce n'est PAS du filtrage métier (filter.ts reste pur) — c'est
+ * l'équivalent du `keyword`, mais pour le type de contrat.
+ *
+ *   - stage → "I" (Internship)
+ *   - CDI   → "F" (Full-time)
+ *
+ * Un type inconnu est ignoré ; aucune contrainte → comportement historique
+ * (tous types confondus). Codes LinkedIn complets : F=Full-time, P=Part-time,
+ * C=Contract, T=Temporary, I=Internship, V=Volunteer, O=Other.
  */
-export function buildGuestSearchUrl(term: string, location: string, start: number): string {
+const JOB_TYPE_CODES: Record<string, string> = {
+  stage: "I",
+  cdi: "F",
+};
+
+/**
+ * Mappe nos types de contrat (cf. UI : "stage"/"CDI") vers les codes `f_JT`
+ * LinkedIn, dédupliqués, en ignorant les types inconnus. Fonction pure.
+ */
+export function contractTypesToJobTypes(contractTypes?: string[]): string[] {
+  const codes = new Set<string>();
+  for (const c of contractTypes ?? []) {
+    const code = JOB_TYPE_CODES[normalizeText(c)];
+    if (code) codes.add(code);
+  }
+  return [...codes];
+}
+
+/**
+ * Construit l'URL de l'endpoint guest pour un terme, une ville et un offset.
+ * `location` vide ⇒ paramètre omis (recherche mondiale). `jobTypes` (codes
+ * `f_JT`) vide ⇒ paramètre omis (tous types de contrat). Fonction pure.
+ */
+export function buildGuestSearchUrl(
+  term: string,
+  location: string,
+  start: number,
+  jobTypes: string[] = [],
+): string {
   const params = new URLSearchParams();
   params.set("keywords", term);
   if (location) params.set("location", location);
+  // Contrainte serveur sur le type de contrat (I=stage, F=CDI…). Plusieurs
+  // valeurs = liste séparée par des virgules. Absent ⇒ tous types.
+  if (jobTypes.length) params.set("f_JT", jobTypes.join(","));
   params.set("start", String(start));
   return `${ORIGIN}${GUEST_SEARCH_PATH}?${params.toString()}`;
 }
@@ -210,15 +255,22 @@ export const linkedinSource: ScrapingSource = {
     });
     // L'endpoint guest LinkedIn n'expose pas le type de contrat → contractType est
     // toujours null. On le marque « non suivi » pour neutraliser le faux WARN
-    // « sélecteur cassé » (aucun sélecteur à réparer). Le filtrage par type de
-    // contrat reste assuré en aval par filter.ts, pas par cette source.
+    // « sélecteur cassé » (aucun sélecteur à réparer). Comme filter.ts ne peut
+    // donc PAS trancher stage vs CDI sur la carte, on contraint la recherche en
+    // amont via `f_JT` (cf. contractTypesToJobTypes) : LinkedIn ne renvoie alors
+    // que les offres du bon type de contrat.
+    const jobTypes = contractTypesToJobTypes(options?.filters?.contractTypes);
     const report = new ParseReport("linkedin", new Set(["contractType"]));
+
+    // Hoistés hors du `try` pour SURVIVRE au `catch` : à l'abort (timeout
+    // orchestrateur) ou au crash, on restitue les offres déjà collectées au lieu
+    // de tout jeter (cf. catch).
+    const allOffers: RawJobOffer[] = [];
+    const seen = new Set<string>();
 
     try {
       const context = await browser.newContext();
       const page = await context.newPage();
-      const allOffers: RawJobOffer[] = [];
-      const seen = new Set<string>();
 
       // LinkedIn n'accepte qu'UNE ville par requête → une recherche par ville
       // (cf. locationSlots), chacune bouclée sur tous les termes. Un seul
@@ -237,8 +289,8 @@ export const linkedinSource: ScrapingSource = {
           let start = 0;
 
           for (let p = 1; p <= maxPages; p++) {
-            const url = buildGuestSearchUrl(term, location, start);
-            logger.info(`Scraping page ${p}`, { term, lieu, url });
+            const url = buildGuestSearchUrl(term, location, start, jobTypes);
+            logger.info(`Scraping page ${p}`, { term, lieu, jobTypes: jobTypes.join(",") || "tous", url });
 
             const { raws, diag, status, bodyTextLength } = await scrapePage(page, url);
             report.addPageDiag(diag);
@@ -306,10 +358,16 @@ export const linkedinSource: ScrapingSource = {
       logger.info(`${allOffers.length} offres uniques collectées, ${result.length} renvoyées`);
       return result;
     } catch (error) {
-      logger.error("Source en échec", {
+      // Abort orchestrateur (timeout) ou crash en cours de boucle : on RESTITUE
+      // les offres déjà collectées plutôt que de renvoyer [] (qui transformait un
+      // run tronqué en « aucune offre »). Best-effort : `allOffers` survit grâce au
+      // hoisting ci-dessus.
+      report.log(logger);
+      logger.error("Source interrompue — restitution des offres déjà collectées", {
         error: error instanceof Error ? error.message : String(error),
+        collectees: allOffers.length,
       });
-      return [];
+      return limit ? allOffers.slice(0, limit) : allOffers;
     } finally {
       await browser.close();
     }

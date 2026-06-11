@@ -271,4 +271,16 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
   //     pas dans runPipeline) : on vérifie au moins que getStats lit la base temp.
   const stats = getStats();
   assert.equal(stats.bySource.reduce((n, s) => n + s.count, 0), 4, "stats par source = 4 offres");
+  // Nouveaux agrégats : câblage SQL de getStats contre la base temp. Toutes les
+  // offres seedées ont un lieu (« Paris ») → aucun seau « Non précisé ».
+  assert.equal(
+    stats.byLocation.reduce((n, l) => n + l.count, 0),
+    4,
+    "stats par localisation = 4 offres",
+  );
+  assert.equal(
+    stats.byContract.reduce((n, c) => n + c.count, 0),
+    4,
+    "stats par type de contrat = 4 offres",
+  );
 });

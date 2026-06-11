@@ -10,8 +10,17 @@
  * Données chargées via le client API typé (`web/lib/api-client.ts`).
  */
 import { useEffect, useState } from "react";
-import { CalendarDays, CalendarRange, CopyX, Timer, Search, Sparkles } from "lucide-react";
-import type { Run, Stats as StatsData, SourceCount } from "../../src/shared/types";
+import {
+  CalendarDays,
+  CalendarRange,
+  CopyX,
+  Timer,
+  Search,
+  Sparkles,
+  MapPin,
+  Briefcase,
+} from "lucide-react";
+import type { Run, Stats as StatsData, SourceCount, LabeledCount } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -158,6 +167,56 @@ function RepartitionParSource({ bySource }: { bySource: SourceCount[] }) {
                 />
               </span>
             </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Répartition générique étiquetée (localisation, type de contrat) — barres
+ * animées + label + count + pourcentage. Même langage visuel que la répartition
+ * par source, sans logo. Les seaux « Autres »/« Non précisé » restent des labels
+ * comme les autres.
+ */
+function RepartitionParLabel({ items, unit }: { items: LabeledCount[]; unit: string }) {
+  if (items.length === 0) {
+    return (
+      <p className="px-1 py-6 text-center text-sm italic text-[var(--color-ink-mute)]">
+        Aucune offre enregistrée pour le moment.
+      </p>
+    );
+  }
+  const max = Math.max(...items.map((i) => i.count), 1);
+  const total = items.reduce((acc, i) => acc + i.count, 0);
+  return (
+    <div className="flex flex-col gap-4">
+      {items.map((item, idx) => {
+        const largeur = Math.round((item.count / max) * 100);
+        const part = total > 0 ? Math.round((item.count / total) * 100) : 0;
+        return (
+          <div key={item.label} className="min-w-0">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <span className="truncate text-[0.85rem] font-medium text-[var(--color-ink-soft)]">
+                {item.label}
+              </span>
+              <span className="shrink-0 font-[family-name:var(--font-mono)] text-[0.75rem] text-[var(--color-ink-mute)]">
+                {item.count.toLocaleString("fr-FR")}
+                <span className="ml-1.5 text-[var(--color-ink-faint)]">{part}%</span>
+              </span>
+            </div>
+            <span
+              className="block h-2 overflow-hidden rounded-full bg-black/40"
+              role="img"
+              aria-label={`${item.label} : ${item.count} ${unit}${item.count > 1 ? "s" : ""} (${part}% du total)`}
+            >
+              <span
+                aria-hidden="true"
+                className="block h-full origin-left rounded-full bg-gradient-to-r from-[var(--color-signal-dim)] to-[var(--color-signal)] [animation:grow-x_0.9s_var(--ease-out-expo)_both]"
+                style={{ width: `${largeur}%`, animationDelay: `${idx * 80 + 120}ms` }}
+              />
+            </span>
           </div>
         );
       })}
@@ -351,7 +410,7 @@ export default function Stats() {
     );
   }
 
-  const { today, week, duplicates, bySource, lastRuns } = etat.data;
+  const { today, week, duplicates, bySource, byLocation, byContract, lastRuns } = etat.data;
 
   return (
     <section aria-label="Statistiques" className="flex flex-col gap-8">
@@ -359,6 +418,18 @@ export default function Stats() {
         <StatCard value={today} label="Trouvées aujourd'hui" icon={<CalendarDays />} accent="signal" i={0} />
         <StatCard value={week} label="Trouvées cette semaine" icon={<CalendarRange />} accent="mute" i={1} />
         <StatCard value={duplicates} label="Doublons rencontrés" icon={<CopyX />} accent="amber" i={2} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="animate-rise p-6">
+          <SectionTitle icon={<MapPin />}>Par localisation</SectionTitle>
+          <RepartitionParLabel items={byLocation} unit="offre" />
+        </Card>
+
+        <Card className="animate-rise p-6">
+          <SectionTitle icon={<Briefcase />}>Par type de contrat</SectionTitle>
+          <RepartitionParLabel items={byContract} unit="offre" />
+        </Card>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">

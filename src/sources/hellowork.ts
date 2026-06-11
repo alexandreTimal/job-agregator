@@ -220,10 +220,14 @@ export const helloworkSource: ScrapingSource = {
     });
     const report = new ParseReport("hellowork");
 
+    // Hoistés hors du `try` pour SURVIVRE au `catch` : à l'abort (timeout
+    // orchestrateur) ou au crash, on restitue les offres déjà collectées au lieu
+    // de tout jeter (cf. catch).
+    const allOffers: RawJobOffer[] = [];
+    const seen = new Set<string>();
+
     try {
       const page = await browser.newPage();
-      const allOffers: RawJobOffer[] = [];
-      const seen = new Set<string>();
 
       // HelloWork n'accepte qu'UNE ville par requête → une recherche par ville
       // (cf. locationSlots), chacune bouclée sur tous les termes. Un seul
@@ -291,10 +295,16 @@ export const helloworkSource: ScrapingSource = {
       logger.info(`${allOffers.length} offres collectées, ${result.length} renvoyées`);
       return result;
     } catch (error) {
-      logger.error("Source en échec", {
+      // Abort orchestrateur (timeout) ou crash en cours de boucle : on RESTITUE
+      // les offres déjà collectées plutôt que de renvoyer [] (qui transformait un
+      // run tronqué en « aucune offre »). Best-effort : `allOffers` survit grâce au
+      // hoisting ci-dessus.
+      report.log(logger);
+      logger.error("Source interrompue — restitution des offres déjà collectées", {
         error: error instanceof Error ? error.message : String(error),
+        collectees: allOffers.length,
       });
-      return [];
+      return limit ? allOffers.slice(0, limit) : allOffers;
     } finally {
       await browser.close();
     }

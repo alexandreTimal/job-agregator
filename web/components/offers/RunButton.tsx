@@ -66,20 +66,50 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
     }
   }
 
-  // Ferme proprement le flux SSE et le chien de garde si le composant est
-  // démonté en plein run.
-  useEffect(() => {
-    return () => {
-      annulerChienDeGarde();
-      fermerStreamRef.current?.();
-    };
-  }, []);
-
   function arreterStream() {
     annulerChienDeGarde();
     fermerStreamRef.current?.();
     fermerStreamRef.current = null;
   }
+
+  /** Ouvre le flux SSE de progression et arme le chien de garde de silence. */
+  function suivreRun() {
+    fermerStreamRef.current = apiClient.streamRun(gererEvenement);
+    // Arme le garde-fou dès l'ouverture : couvre le cas d'une coupure du flux
+    // avant tout premier événement.
+    reactiverChienDeGarde();
+  }
+
+  // Au montage : si un run est déjà en cours côté serveur (ex. l'utilisateur a
+  // changé de page puis est revenu — la page Offres et ce bouton sont démontés
+  // à chaque navigation), on se reconnecte au flux SSE pour reprendre le suivi.
+  // Le serveur rejoue le journal du run courant, ce qui restaure aussitôt la
+  // progression. Le cleanup ferme proprement le flux + le chien de garde si le
+  // composant est démonté en plein run.
+  useEffect(() => {
+    let actif = true;
+    void (async () => {
+      try {
+        const { running } = await apiClient.getRunStatus();
+        // `!enCours` : ne pas écraser un run que l'utilisateur vient de lancer
+        // depuis ce même montage (course entre lancer() et ce statut).
+        if (!actif || !running || enCours) return;
+        setEnCours(true);
+        setMessage("Reprise du suivi…");
+        suivreRun();
+      } catch {
+        // Best-effort : si le statut échoue, on reste en idle. Un run réel se
+        // signalera de toute façon au prochain démarrage manuel.
+      }
+    })();
+    return () => {
+      actif = false;
+      annulerChienDeGarde();
+      fermerStreamRef.current?.();
+    };
+    // Effet de montage uniquement (reconnexion + cleanup).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * (Ré)arme le chien de garde : si aucun événement n'arrive pendant
@@ -186,10 +216,7 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
       return;
     }
 
-    fermerStreamRef.current = apiClient.streamRun(gererEvenement);
-    // Arme le garde-fou dès l'ouverture : couvre le cas d'une coupure du flux
-    // avant tout premier événement.
-    reactiverChienDeGarde();
+    suivreRun();
   }
 
   async function annuler() {

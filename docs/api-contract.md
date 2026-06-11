@@ -118,6 +118,13 @@ Remplace la configuration effective.
 
 Statistiques agrégées (requêtes sqlite + table `runs`).
 
+`byLocation` (`LabeledCount[]`) : répartition par lieu, triée par volume, limitée
+aux 8 lieux les plus fréquents ; la traîne est regroupée dans un seau `"Autres"`
+et les offres sans lieu dans `"Non précisé"`. `byContract` (`LabeledCount[]`) :
+répartition par type de contrat, classe binaire `"Stage"` / `"CDI"` (dérivée à
+l'insertion depuis le `contractType` source, repli sur le titre). Le pourcentage
+est calculé côté UI sur le total.
+
 Réponse `200` : `Stats`
 
 ```json
@@ -126,6 +133,15 @@ Réponse `200` : `Stats`
   "week": 18,
   "duplicates": 42,
   "bySource": [{ "source": "wttj", "count": 12, "logo": "/logos/wttj.svg" }],
+  "byLocation": [
+    { "label": "Paris", "count": 9 },
+    { "label": "Autres", "count": 3 },
+    { "label": "Non précisé", "count": 2 }
+  ],
+  "byContract": [
+    { "label": "CDI", "count": 13 },
+    { "label": "Stage", "count": 5 }
+  ],
   "lastRuns": [
     {
       "id": 7,
