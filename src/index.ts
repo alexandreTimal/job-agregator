@@ -89,6 +89,7 @@ async function main(): Promise<void> {
   const tasks = activeSources.map((source) =>
     limit(async () => {
       const boards = settings.atsBoards?.[source.name] ?? [];
+      const controller = new AbortController();
       let offers: Awaited<ReturnType<typeof source.fetch>> = [];
       try {
         offers = await withTimeout(
@@ -97,10 +98,15 @@ async function main(): Promise<void> {
             filters: baseFilters,
             boards,
             maxPages: config.maxPagesPerSource ?? 3,
+            signal: controller.signal,
           }),
           SOURCE_TIMEOUT_MS,
         );
       } catch (err) {
+        // Timeout/erreur : on signale la source abandonnée pour qu'elle ferme son
+        // navigateur (sinon il resterait ouvert jusqu'à la résolution de sa propre
+        // promesse — fuite de ressource + slot pLimit occupé). Best-effort.
+        controller.abort();
         logger.warn("Source ignorée (échec ou timeout)", {
           source: source.name,
           error: err instanceof Error ? err.message : String(err),

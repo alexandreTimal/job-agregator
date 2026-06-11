@@ -198,6 +198,13 @@ export const wttjSource: ScrapingSource = {
     }
 
     const browser = await launchBrowser();
+    // Abort de l'orchestrateur (timeout/échec) : on ferme le navigateur sans
+    // attendre la résolution de la promesse de fetch (les opérations Playwright
+    // en cours lèveront → catch → []). Le `finally` ci-dessous reste : le double
+    // close Playwright est sans danger.
+    options?.signal?.addEventListener("abort", () => {
+      browser.close().catch(() => {});
+    });
     const report = new ParseReport("wttj");
 
     try {

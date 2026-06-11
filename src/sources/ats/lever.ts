@@ -43,6 +43,7 @@ export const leverSource: ScrapingSource = {
     const seen = new Set<string>();
 
     for (const board of boards) {
+      if (options?.signal?.aborted) break;
       const url = `https://api.lever.co/v0/postings/${encodeURIComponent(board)}?mode=json`;
       const data = await fetchJson<LeverPosting[]>(url);
       if (!Array.isArray(data) || data.length === 0) {

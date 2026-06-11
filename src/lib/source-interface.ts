@@ -19,6 +19,8 @@ export interface FetchOptions {
   terms?: string[];
   /** Boards à interroger (sources ATS uniquement) : tokens d'entreprise. */
   boards?: string[];
+  /** Signal d'annulation : à l'abort, la source libère ses ressources (ferme son navigateur). */
+  signal?: AbortSignal;
 }
 
 export interface ScrapingSource {

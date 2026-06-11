@@ -43,6 +43,7 @@ export const greenhouseSource: ScrapingSource = {
     const seen = new Set<string>();
 
     for (const board of boards) {
+      if (options?.signal?.aborted) break;
       const url = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs?content=false`;
       const data = await fetchJson<{ jobs?: GreenhouseJob[] }>(url);
       if (!data?.jobs?.length) {
