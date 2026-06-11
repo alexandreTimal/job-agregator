@@ -21,24 +21,30 @@ import { computeHash, normalizeText } from "./lib/normalize";
 import { passesFilters, scoreOffer } from "./filter";
 import { initDb, offerExists, insertOffer, insertRun, closeDb } from "./store/sqlite";
 import { getSettings } from "./settings";
+import { pLimit, withTimeout } from "./lib/concurrency";
 import { createLogger, logFilePath } from "./lib/logger";
 import type { RunEvent } from "./shared/types";
 import type { ScoredOffer } from "./lib/types";
 
 const logger = createLogger("ORCHESTRATOR");
 
+/** Sources en parallèle (web = un seul navigateur/source, hôte jamais frappé 2× à la fois). */
+const SOURCE_CONCURRENCY = 4;
+/** Une source traite TOUS ses termes : timeout large. */
+const SOURCE_TIMEOUT_MS = 240_000;
+
 /** Émet un événement de progression sur stdout, relayé en SSE par le serveur. */
 function emit(event: RunEvent): void {
   process.stdout.write(`@@RUN ${JSON.stringify(event)}\n`);
 }
 
-function buildFilters(term: string, contractTypes: string[]): SearchFilters {
+/** Filtres communs à toutes les sources web (le keyword est injecté par terme). */
+function buildBaseFilters(contractTypes: string[]): SearchFilters {
   const cityLocations = (config.locations ?? [])
     .filter((l) => normalizeText(l) !== "remote")
     .map((label) => ({ label, radius: config.defaultRadiusKm ?? null }));
 
   return {
-    keyword: term,
     locations: cityLocations.length ? cityLocations : undefined,
     contractTypes: contractTypes.length ? contractTypes : undefined,
     remotePreference: config.remote ?? "any",
@@ -76,55 +82,69 @@ async function main(): Promise<void> {
   let newCount = 0;
   let duplicates = 0;
 
-  for (const term of settings.terms) {
-    const filters = buildFilters(term, settings.contractTypes);
+  const baseFilters = buildBaseFilters(settings.contractTypes);
+  const limit = pLimit(SOURCE_CONCURRENCY);
 
-    for (const source of activeSources) {
-      // Les sources capturent leurs propres erreurs (best-effort) et renvoient [].
-      const offers = await source.fetch({
-        filters,
-        maxPages: config.maxPagesPerSource ?? 3,
-      });
-
-      found += offers.length;
-      perSource[source.name] = (perSource[source.name] ?? 0) + offers.length;
-      emit({ type: "progress", term, source: source.name, found: offers.length });
-
-      for (const offer of offers) {
-        const hash = computeHash(offer);
-
-        // Comptage explicite new vs duplicates (fini l'INSERT OR IGNORE muet).
-        if (candidates.has(hash) || offerExists(hash)) {
-          duplicates++;
-          continue;
-        }
-
-        // Le filtre déterministe gouverne ce qui est persisté : une offre qui
-        // échoue n'entre pas en base et ne sera donc jamais exposée à l'UI.
-        const verdict = passesFilters(offer, effectiveConfig);
-        if (!verdict.passed) continue;
-
-        newCount++;
-
-        // On calcule le score AVANT l'insertion pour le persister réellement
-        // (le tri GET /api/offers?sort=score s'appuie dessus).
-        const { score, priority } = scoreOffer(offer, effectiveConfig);
-        candidates.set(hash, { ...offer, hash, score, priority });
-
-        // En dry-run, on ne persiste rien (ni offres, ni ligne runs).
-        if (dryRun) continue;
-
-        insertOffer({
-          hash,
-          title: offer.title,
-          company: offer.company,
-          location: offer.location,
-          url: offer.urlSource,
-          source: offer.sourceName,
-          score,
-          publishedAt: offer.publishedAt ? offer.publishedAt.toISOString() : null,
+  // Une tâche par source : la source boucle elle-même sur tous les termes.
+  const tasks = activeSources.map((source) =>
+    limit(async () => {
+      const boards = settings.atsBoards?.[source.name] ?? [];
+      let offers: Awaited<ReturnType<typeof source.fetch>> = [];
+      try {
+        offers = await withTimeout(
+          source.fetch({
+            terms: settings.terms,
+            filters: baseFilters,
+            boards,
+            maxPages: config.maxPagesPerSource ?? 3,
+          }),
+          SOURCE_TIMEOUT_MS,
+        );
+      } catch (err) {
+        logger.warn("Source ignorée (échec ou timeout)", {
+          source: source.name,
+          error: err instanceof Error ? err.message : String(err),
         });
+        offers = [];
       }
+      perSource[source.name] = offers.length;
+      emit({ type: "progress", source: source.name, found: offers.length });
+      return offers;
+    }),
+  );
+
+  const offersBySource = await Promise.all(tasks);
+
+  for (const offers of offersBySource) {
+    found += offers.length;
+    for (const offer of offers) {
+      const hash = computeHash(offer);
+
+      if (candidates.has(hash) || offerExists(hash)) {
+        duplicates++;
+        continue;
+      }
+
+      const verdict = passesFilters(offer, effectiveConfig);
+      if (!verdict.passed) continue;
+
+      newCount++;
+
+      const { score, priority } = scoreOffer(offer, effectiveConfig);
+      candidates.set(hash, { ...offer, hash, score, priority });
+
+      if (dryRun) continue;
+
+      insertOffer({
+        hash,
+        title: offer.title,
+        company: offer.company,
+        location: offer.location,
+        url: offer.urlSource,
+        source: offer.sourceName,
+        score,
+        publishedAt: offer.publishedAt ? offer.publishedAt.toISOString() : null,
+      });
     }
   }
 
