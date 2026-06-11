@@ -11,7 +11,7 @@ de jobboards maison**, déterministe, doublé d'une **UI web locale** (mono-util
 `localhost`) qui a **remplacé Notion** :
 
 ```
-settings (sqlite) → [par terme × par source] fetch → dedup (sqlite) → filtre déterministe → base sqlite ← UI web locale
+settings (sqlite) → fetch concurrent [1 tâche/source, tous les termes] → dedup (sqlite) → filtre déterministe → base sqlite ← UI web locale
 ```
 
 Objectif : remplacer les alertes natives (peu fiables) et les filtres faibles
@@ -44,15 +44,17 @@ déclenchement de run).
 job-agregator/
 ├── config/search.config.ts   # exclude, salaryMin, locations… (critères de filtrage statiques)
 ├── src/
-│   ├── sources/              # un fichier par jobboard (interface ScrapingSource)
-│   ├── lib/source-interface.ts  # ScrapingSource + type RawJobOffer
+│   ├── sources/              # une source par jobboard (interface ScrapingSource)
+│   │   └── ats/              # adapters ATS génériques (Greenhouse/Lever) : API JSON par board
+│   ├── lib/source-interface.ts  # ScrapingSource (kind web|ats) + FetchOptions (terms/boards/signal)
 │   ├── lib/logger.ts
+│   ├── lib/concurrency.ts    # pLimit + withTimeout (orchestrateur concurrent borné)
 │   ├── filter.ts             # filtre DÉTERMINISTE pur : (offer, config) => boolean
 │   ├── settings.ts           # config EFFECTIVE (table settings) seedée depuis search.config.ts
 │   ├── store/sqlite.ts       # dedup par hash + liked/deleted/published_at + tables settings/runs
 │   ├── shared/types.ts       # types du contrat d'API (partagés src/server ↔ web)
 │   ├── server/               # serveur Fastify local (API REST + SSE de run)
-│   └── index.ts              # orchestrateur (lançable CLI ou spawné par le serveur)
+│   └── index.ts              # orchestrateur : runPipeline() concurrent (lançable CLI ou spawné par le serveur)
 ├── web/                      # UI Vite/React (3 pages : Paramètres / Stats / Offres)
 ├── public/logos/             # logos des sources (assets locaux .svg)
 ├── docs/api-contract.md      # contrat d'API figé (source de vérité)
@@ -64,10 +66,12 @@ job-agregator/
 
 La config **effective** vit dans la table sqlite `settings` (clé/valeur), seedée
 une première fois depuis `config/search.config.ts` + le registry des sources.
-L'UI pilote `terms[]`, `contractTypes` (`"stage"` / `"CDI"`) et `enabledSources[]`
+L'UI pilote `terms[]`, `contractTypes` (`"stage"` / `"CDI"`), `enabledSources[]` et
+`atsBoards` (Record `{<source ATS>: tokens d'entreprise[]}`, ex. `{ greenhouse: ["stripe"] }`)
 via `src/settings.ts`. À chaque run, l'orchestrateur lit `getSettings()` et fusionne
-ces champs dans la config passée au filtre déterministe. Les autres critères
-(`exclude`, `salaryMin`, `locations`…) restent dans `search.config.ts`.
+ces champs dans la config passée au filtre déterministe ; il route `atsBoards[<source>]`
+vers la source ATS correspondante. Les autres critères (`exclude`, `salaryMin`,
+`locations`…) restent dans `search.config.ts`.
 
 ### Run en sous-process
 
@@ -77,6 +81,21 @@ JSON de progression sur stdout (préfixe `@@RUN `) que le serveur relaie en **SS
 (`GET /api/run/stream`). Un **verrou en mémoire serveur** garantit un seul run à la
 fois (2e `POST /api/run` → `423`). Chaque run écrit une ligne dans la table `runs`
 (durée, found, new, duplicates, per_source).
+
+### Orchestration concurrente (une tâche par source)
+
+Le cœur du pipeline est **`runPipeline()`** (exporté par `src/index.ts`, donc
+testable hors process ; `main()` ne s'exécute qu'en entrée CLI/spawn grâce à un garde
+`isEntry`). Chaque source active = **une seule tâche** lancée via
+`pLimit(SOURCE_CONCURRENCY = 4)` + un timeout par source (`withTimeout`, 240 s ;
+helpers dans `src/lib/concurrency.ts`). Une source reçoit **tous** les `terms` d'un
+coup : les sources web bouclent leurs termes **en interne** en réutilisant un seul
+navigateur — ainsi un même hôte n'est **jamais** frappé en parallèle (sûr anti-bot).
+Au timeout/erreur, l'orchestrateur `abort()` la source via `FetchOptions.signal` (les
+sources web ferment alors leur navigateur, sans attendre la fin de la promesse
+abandonnée). Best-effort strict conservé : une source qui échoue rend `[]`, le run va
+toujours jusqu'à `done`. La dédup/filtre/score s'applique ensuite sur l'agrégat de
+toutes les sources.
 
 ## Règles de contribution
 
@@ -88,6 +107,16 @@ fois (2e `POST /api/run` → `423`). Chaque run écrit une ligne dans la table `
 - Les critères (`exclude`, `salaryMin`, `locations`, `contractTypes`) viennent
   **uniquement** de `config/search.config.ts`. Pas de critère codé en dur ailleurs.
 - Un changement de filtrage doit être lisible en `git diff` et couvert par un test.
+
+### Tests
+
+- Runner **natif** `node:test` + `node:assert` via tsx (`npm test`, glob
+  `src/**/*.test.ts`) — **zéro dépendance de test**. Toute logique pure (filtre,
+  mappers de sources ATS, helpers de dates/concurrence) doit être couverte.
+- L'orchestration a un **test d'intégration** (`src/orchestrator.test.ts`) qui exerce
+  `runPipeline` (routage `atsBoards`, dédup inter-sources, compteurs, best-effort) sur
+  une base sqlite **temporaire isolée** via la var d'env `JOB_AGREGATOR_DB`. Un test ne
+  doit **jamais** toucher la vraie base `data/job-agregator.db`.
 
 ### Observabilité = diagnostiquer une panne de scraping/parsing en un coup d'œil
 
@@ -109,9 +138,22 @@ fois (2e `POST /api/run` → `423`). Chaque run écrit une ligne dans la table `
 ### Sources
 
 - Chaque source implémente l'interface `ScrapingSource` :
-  `fetch(options?: FetchOptions) => Promise<RawJobOffer[]>`.
+  `fetch(options?: FetchOptions) => Promise<RawJobOffer[]>`, avec un `kind` (`"web"`
+  par défaut, ou `"ats"`).
 - Une source ne fait **que** récupérer et normaliser des offres brutes. Elle
-  **n'écrit pas** en base, ne filtre pas, ne pousse pas vers Notion.
+  **n'écrit pas** en base, ne filtre pas (au sens `filter.ts`), ne pousse pas vers Notion.
+- Une source reçoit `FetchOptions.terms` (tous les termes du run), `boards` (sources
+  ATS) et `signal` (abort sur timeout). Les sources **web** bouclent ces termes en
+  interne (un seul navigateur, dédup par URL à travers termes+pages) et écoutent
+  `signal` pour fermer leur navigateur ; un `filters.keyword` unique reste accepté en repli.
+- **Sources ATS (Greenhouse, Lever — `src/sources/ats/`)** : `kind: "ats"`. Elles
+  interrogent une **API JSON par board** (token d'entreprise, listés dans
+  `settings.atsBoards[<source>]` et édités depuis l'UI Paramètres), pas un DOM. L'API
+  rend TOUT le board : la source ne garde que les offres dont le **titre** matche un
+  terme (`matchesAnyTerm`, `src/sources/ats/shared.ts`). C'est une **émulation de la
+  recherche serveur** (l'équivalent du `keyword` des sources web), **pas** du filtrage
+  métier — `src/filter.ts` reste pur et n'a aucune notion d'ATS. Helpers communs :
+  `fetchJson` (GET best-effort, `null` sur anomalie) + `matchesAnyTerm`.
 - Les sources legacy fragiles (Indeed anti-bot, LinkedIn via email, Google Alerts
   RSS) sont traitées en **best-effort** : une source qui échoue ne casse pas le run.
 - **WTTJ requiert une session authentifiée.** Sa recherche par mot-clé
@@ -244,10 +286,18 @@ Tailwind + tokens).
 
 ## Check-list avant d'ajouter une source
 
-1. Créer `src/sources/<nom>.ts` implémentant `ScrapingSource`.
-2. La source accepte un `keyword` (= le terme) et rend des `RawJobOffer[]`.
+1. Créer `src/sources/<nom>.ts` implémentant `ScrapingSource` (préciser `kind`).
+2. La source accepte `options.terms` (tous les termes du run) et rend des
+   `RawJobOffer[]`. Une source web boucle ces termes en interne ; un `filters.keyword`
+   unique reste accepté en repli.
 3. Gérer les erreurs en best-effort (log + tableau vide, pas d'exception qui
-   remonte jusqu'à casser le run).
-4. L'enregistrer dans le registry des sources.
-5. Ne rien filtrer ni dédoublonner dans la source — c'est le rôle de
-   `filter.ts` et `store/sqlite.ts`.
+   remonte jusqu'à casser le run) ; écouter `options.signal` pour libérer ses
+   ressources sur abort (sources web : fermer le navigateur).
+4. L'enregistrer dans le registry des sources (`src/sources/registry.ts`).
+5. Ne rien filtrer (au sens `filter.ts`) ni dédoublonner inter-run dans la source —
+   c'est le rôle de `filter.ts` et `store/sqlite.ts`.
+6. **Source ATS** (API JSON par board) : `kind: "ats"`, fichier sous
+   `src/sources/ats/`, lire les boards depuis `options.boards`, réutiliser
+   `fetchJson`/`matchesAnyTerm` (`src/sources/ats/shared.ts`), et exposer ses boards
+   dans l'UI Paramètres via `settings.atsBoards` (catalogue `KNOWN_SOURCES` marqué
+   `ats: true` dans `web/pages/Settings.tsx`).
