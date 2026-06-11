@@ -13,9 +13,10 @@
  *   npm run fetch          # run réel
  *   npm run fetch:dry      # dry-run (ne persiste RIEN : ni offres, ni ligne runs)
  */
+import { fileURLToPath } from "node:url";
 import { config } from "../config/search.config";
 import type { SearchConfig } from "../config/search.config";
-import type { SearchFilters } from "./lib/source-interface";
+import type { ScrapingSource, SearchFilters } from "./lib/source-interface";
 import { getEnabledSources } from "./sources/registry";
 import { computeHash, normalizeText } from "./lib/normalize";
 import { passesFilters, scoreOffer } from "./filter";
@@ -23,7 +24,7 @@ import { initDb, offerExists, insertOffer, insertRun, closeDb } from "./store/sq
 import { getSettings } from "./settings";
 import { pLimit, withTimeout } from "./lib/concurrency";
 import { createLogger, logFilePath } from "./lib/logger";
-import type { RunEvent } from "./shared/types";
+import type { RunEvent, Settings } from "./shared/types";
 import type { ScoredOffer } from "./lib/types";
 
 const logger = createLogger("ORCHESTRATOR");
@@ -51,31 +52,31 @@ function buildBaseFilters(contractTypes: string[]): SearchFilters {
   };
 }
 
-async function main(): Promise<void> {
-  const dryRun = process.argv.includes("--dry-run");
-  const startedAt = Date.now();
+/** Bilan d'un run, renvoyé par `runPipeline` (sans I/O d'init/fin). */
+export interface RunSummary {
+  found: number;
+  newCount: number;
+  duplicates: number;
+  perSource: Record<string, number>;
+  /** Nombre d'offres uniques retenues (= taille du Map de candidats). */
+  retained: number;
+}
 
-  initDb();
-
-  // Config EFFECTIVE pilotée par l'UI (table settings).
-  const settings = getSettings();
-  const activeSources = getEnabledSources(settings.enabledSources);
-
-  // Critères de filtrage : config statique + contractTypes pilotés par l'UI.
-  const effectiveConfig: SearchConfig = {
-    ...config,
-    terms: settings.terms,
-    contractTypes: settings.contractTypes,
-  };
-
-  logger.info("Démarrage", {
-    terms: settings.terms,
-    sources: activeSources.map((s) => s.name),
-    contractTypes: settings.contractTypes,
-    dryRun,
-    journal: logFilePath(),
-  });
-
+/**
+ * Cœur testable du pipeline : fetch concurrent (1 tâche/source) → dédup
+ * inter-sources → filtre déterministe → score → persistance (hors dry-run).
+ *
+ * Aucune I/O d'init/fin : `initDb`/`insertRun`/`closeDb` restent dans `main()`.
+ * Les helpers `offerExists`/`insertOffer` du store supposent la DB déjà ouverte.
+ * La progression est émise via `emitEvent` (en CLI/serveur : `emit` → SSE).
+ */
+export async function runPipeline(
+  activeSources: ScrapingSource[],
+  settings: Settings,
+  effectiveConfig: SearchConfig,
+  dryRun: boolean,
+  emitEvent: (event: RunEvent) => void,
+): Promise<RunSummary> {
   const candidates = new Map<string, ScoredOffer>();
   const perSource: Record<string, number> = {};
   let found = 0;
@@ -114,7 +115,7 @@ async function main(): Promise<void> {
         offers = [];
       }
       perSource[source.name] = offers.length;
-      emit({ type: "progress", source: source.name, found: offers.length });
+      emitEvent({ type: "progress", source: source.name, found: offers.length });
       return offers;
     }),
   );
@@ -154,21 +155,67 @@ async function main(): Promise<void> {
     }
   }
 
+  return { found, newCount, duplicates, perSource, retained: candidates.size };
+}
+
+async function main(): Promise<void> {
+  const dryRun = process.argv.includes("--dry-run");
+  const startedAt = Date.now();
+
+  initDb();
+
+  // Config EFFECTIVE pilotée par l'UI (table settings).
+  const settings = getSettings();
+  const activeSources = getEnabledSources(settings.enabledSources);
+
+  // Critères de filtrage : config statique + contractTypes pilotés par l'UI.
+  const effectiveConfig: SearchConfig = {
+    ...config,
+    terms: settings.terms,
+    contractTypes: settings.contractTypes,
+  };
+
+  logger.info("Démarrage", {
+    terms: settings.terms,
+    sources: activeSources.map((s) => s.name),
+    contractTypes: settings.contractTypes,
+    dryRun,
+    journal: logFilePath(),
+  });
+
+  const summary = await runPipeline(activeSources, settings, effectiveConfig, dryRun, emit);
+
   const durationMs = Date.now() - startedAt;
-  logger.info("Résumé", { found, new: newCount, duplicates, retenues: candidates.size });
+  logger.info("Résumé", {
+    found: summary.found,
+    new: summary.newCount,
+    duplicates: summary.duplicates,
+    retenues: summary.retained,
+  });
 
   if (!dryRun) {
-    insertRun({ durationMs, found, new: newCount, duplicates, perSource });
+    insertRun({
+      durationMs,
+      found: summary.found,
+      new: summary.newCount,
+      duplicates: summary.duplicates,
+      perSource: summary.perSource,
+    });
   }
 
   emit({ type: "done", message: "run terminé" });
   closeDb();
 }
 
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  logger.error("Run échoué", { error: message });
-  emit({ type: "error", message });
-  closeDb();
-  process.exit(1);
-});
+// N'exécute `main()` QUE si ce fichier est l'entrée (CLI `npm run fetch`, ou
+// spawn serveur). À l'import (tests), `runPipeline` est exporté sans effet de bord.
+const isEntry = process.argv[1] !== undefined && process.argv[1] === fileURLToPath(import.meta.url);
+if (isEntry) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("Run échoué", { error: message });
+    emit({ type: "error", message });
+    closeDb();
+    process.exit(1);
+  });
+}
