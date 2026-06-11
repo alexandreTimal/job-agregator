@@ -38,7 +38,7 @@ export interface PageDiag {
 
 /** Champs dont on suit le taux de remplissage (salary exclu : non scrapé partout). */
 const TRACKED_FIELDS = ["company", "location", "contractType", "publishedAt"] as const;
-type TrackedField = (typeof TRACKED_FIELDS)[number];
+export type TrackedField = (typeof TRACKED_FIELDS)[number];
 
 const MAX_DATE_SAMPLES = 10;
 
@@ -55,7 +55,17 @@ export class ParseReport {
   };
   private readonly unparsedDates: string[] = [];
 
-  constructor(private readonly source: string) {}
+  /**
+   * @param untracked Champs sciemment non collectés par la source (ex. LinkedIn
+   *   guest n'expose pas `contractType`). Leur taux de remplissage reste compté
+   *   et affiché dans le bilan INFO, mais on NE lève PAS le WARN « sélecteur
+   *   cassé » à leur sujet : c'est un faux positif (rien à réparer). Défaut vide
+   *   ⇒ comportement strictement inchangé pour les sources existantes.
+   */
+  constructor(
+    private readonly source: string,
+    private readonly untracked: ReadonlySet<TrackedField> = new Set(),
+  ) {}
 
   /** Enregistre le diagnostic d'une page scrapée. */
   addPageDiag(diag: PageDiag): void {
@@ -102,6 +112,8 @@ export class ParseReport {
     // Alerte ciblée : champ vide à 100 % alors qu'on a bien lu des offres ⇒
     // sélecteur quasi certainement cassé. C'est LE signal à corriger en priorité.
     for (const field of TRACKED_FIELDS) {
+      // Champ non collecté par cette source : null à 100% est attendu, pas un bug.
+      if (this.untracked.has(field)) continue;
       if (this.kept > 0 && this.nulls[field] === this.kept) {
         logger.warn(
           `Champ '${field}' vide sur 100% des offres — sélecteur probablement cassé`,

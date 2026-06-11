@@ -160,7 +160,11 @@ export const linkedinSource: ScrapingSource = {
     options?.signal?.addEventListener("abort", () => {
       browser.close().catch(() => {});
     });
-    const report = new ParseReport("linkedin");
+    // L'endpoint guest LinkedIn n'expose pas le type de contrat → contractType est
+    // toujours null. On le marque « non suivi » pour neutraliser le faux WARN
+    // « sélecteur cassé » (aucun sélecteur à réparer). Le filtrage par type de
+    // contrat reste assuré en aval par filter.ts, pas par cette source.
+    const report = new ParseReport("linkedin", new Set(["contractType"]));
 
     try {
       const context = await browser.newContext();
