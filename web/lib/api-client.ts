@@ -148,6 +148,18 @@ export const apiClient = {
   },
 
   /**
+   * Annule le run en cours. Renvoie `true` si l'annulation a été acceptée (202),
+   * `false` si aucun run n'était en cours côté serveur (HTTP 409).
+   */
+  async cancelRun(): Promise<boolean> {
+    if (USE_MOCK) return Promise.resolve(true);
+    const res = await fetch(`/api/run/cancel`, { method: "POST" });
+    if (res.status === 409) return false;
+    if (!res.ok) throw new Error(`HTTP ${res.status} sur /api/run/cancel`);
+    return true;
+  },
+
+  /**
    * Ouvre le flux SSE de progression. Renvoie une fonction de fermeture.
    * En mode MOCK, simule quelques événements puis `done`.
    */

@@ -7,7 +7,10 @@
  * - sinon ouvre le flux SSE `apiClient.streamRun(...)` pour afficher l'avancement
  *   en direct, puis appelle `onRunFinished` à la fin (event `done` ou `error`).
  *
- * Le bouton est désactivé tant qu'un run est en cours.
+ * Pendant un run le bouton reste cliquable : au survol/focus il bascule en
+ * « Annuler la recherche » (style danger) et déclenche `apiClient.cancelRun()`.
+ * L'annulation revient par le flux SSE comme un terminal `done` neutre
+ * (« Recherche annulée »), ce qui réarme le bouton via le chemin habituel.
  *
  * Garde-fou : si le flux SSE tombe sans émettre `done`/`error` (process tué,
  * serveur crashé), `apiClient.streamRun` ferme l'EventSource sans remonter
@@ -17,7 +20,7 @@
  * (Correctif idéal côté foundation : émettre un RunEvent `error` sur `es.onerror`.)
  */
 import { useEffect, useRef, useState } from "react";
-import { Radar, Loader2, TriangleAlert } from "lucide-react";
+import { Radar, Loader2, TriangleAlert, Ban } from "lucide-react";
 import type { RunEvent } from "../../../src/shared/types";
 import { apiClient } from "../../lib/api-client";
 import { cn } from "@/lib/utils";
@@ -34,8 +37,18 @@ interface RunButtonProps {
  */
 const DELAI_SILENCE_MS = 120_000;
 
+/**
+ * Délai de silence (ms) raccourci pendant une annulation : une fois `cancelRun`
+ * accepté, le serveur escalade en SIGKILL après ~5 s, donc le terminal `done`
+ * « Recherche annulée » doit arriver vite. Au-delà, on considère le suivi perdu
+ * sans attendre les 2 min du seuil nominal.
+ */
+const DELAI_ANNULATION_MS = 15_000;
+
 export default function RunButton({ onRunFinished }: RunButtonProps) {
   const [enCours, setEnCours] = useState(false);
+  /** Survol ou focus du bouton : déclenche l'affordance d'annulation en run. */
+  const [survol, setSurvol] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   /** Fonction de fermeture du flux SSE courant, le cas échéant. */
@@ -70,7 +83,7 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
    * `DELAI_SILENCE_MS`, on suppose le flux perdu, on réarme le bouton et on
    * rafraîchit la liste (le run a pu aboutir côté serveur malgré la coupure).
    */
-  function reactiverChienDeGarde() {
+  function reactiverChienDeGarde(delai: number = DELAI_SILENCE_MS) {
     annulerChienDeGarde();
     minuterieSilenceRef.current = setTimeout(() => {
       minuterieSilenceRef.current = null;
@@ -81,7 +94,7 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
       setEnCours(false);
       arreterStream();
       onRunFinished();
-    }, DELAI_SILENCE_MS);
+    }, delai);
   }
 
   function gererEvenement(event: RunEvent) {
@@ -144,6 +157,35 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
     reactiverChienDeGarde();
   }
 
+  async function annuler() {
+    if (!enCours) return;
+    setErreur(null);
+    setMessage("Annulation…");
+
+    let annule: boolean;
+    try {
+      annule = await apiClient.cancelRun();
+    } catch {
+      // L'appel a échoué : le run suit son cours, on en informe sans réarmer.
+      setMessage("Échec de l'annulation. La recherche continue.");
+      return;
+    }
+
+    if (!annule) {
+      // HTTP 409 : plus aucun run côté serveur (course). On réarme localement.
+      setEnCours(false);
+      setMessage(null);
+      arreterStream();
+      onRunFinished();
+      return;
+    }
+    // 202 : le terminal `done` « Recherche annulée » arrivera par le flux SSE et
+    // réarmera le bouton via `gererEvenement`. On raccourcit le chien de garde :
+    // l'escalade SIGKILL serveur garantit un retour rapide ; au-delà, on ne veut
+    // pas laisser le bouton coincé sur « Annulation… » pendant 2 min.
+    reactiverChienDeGarde(DELAI_ANNULATION_MS);
+  }
+
   return (
     <div className="relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)]/60 shadow-[var(--shadow-panel)]">
       {/* Texture grille en fond du panneau de commande */}
@@ -173,27 +215,36 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
 
         <button
           type="button"
-          onClick={lancer}
-          disabled={enCours}
-          aria-busy={enCours}
+          onClick={enCours ? annuler : lancer}
+          onMouseEnter={() => setSurvol(true)}
+          onMouseLeave={() => setSurvol(false)}
+          onFocus={() => setSurvol(true)}
+          onBlur={() => setSurvol(false)}
+          aria-busy={enCours && !survol}
           className={cn(
             "inline-flex h-11 items-center justify-center gap-2 rounded-[var(--radius-sm)] px-5 text-sm font-semibold " +
-              "transition-all duration-200 ease-[var(--ease-out-expo)] active:translate-y-px " +
-              "disabled:cursor-progress",
-            enCours
-              ? "border border-[var(--color-line-strong)] bg-black/30 text-[var(--color-ink-mute)]"
-              : "bg-[var(--color-signal)] text-[#0a0b0a] shadow-[0_10px_30px_-12px_var(--color-signal-glow)] hover:bg-[#d4fa60]",
+              "transition-all duration-200 ease-[var(--ease-out-expo)] active:translate-y-px",
+            !enCours
+              ? "cursor-pointer bg-[var(--color-signal)] text-[#0a0b0a] shadow-[0_10px_30px_-12px_var(--color-signal-glow)] hover:bg-[#d4fa60]"
+              : survol
+                ? "cursor-pointer border border-[var(--color-danger)]/50 bg-[var(--color-danger)]/15 text-[var(--color-danger)]"
+                : "cursor-progress border border-[var(--color-line-strong)] bg-black/30 text-[var(--color-ink-mute)]",
           )}
         >
-          {enCours ? (
-            <>
-              <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-              Recherche en cours…
-            </>
-          ) : (
+          {!enCours ? (
             <>
               <Radar aria-hidden="true" className="size-4" />
               Lancer la recherche
+            </>
+          ) : survol ? (
+            <>
+              <Ban aria-hidden="true" className="size-4" />
+              Annuler la recherche
+            </>
+          ) : (
+            <>
+              <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+              Recherche en cours…
             </>
           )}
         </button>

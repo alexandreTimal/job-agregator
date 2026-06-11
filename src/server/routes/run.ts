@@ -32,6 +32,13 @@ const RUN_PREFIX = "@@RUN ";
 /** Intervalle du heartbeat SSE (commentaire `: ping`) en millisecondes. */
 const HEARTBEAT_MS = 15_000;
 
+/**
+ * Délai de grâce (ms) après un SIGTERM d'annulation avant d'escalader en
+ * SIGKILL. Couvre le cas où npx/tsx ne relaient pas SIGTERM ou où chromium
+ * traîne à se fermer : on garantit la mort du groupe et un `close` rapide.
+ */
+const CANCEL_GRACE_MS = 5_000;
+
 /** Chemin du point d'entrée du pipeline relativement à ce fichier. */
 const PIPELINE_ENTRY = resolve(fileURLToPath(import.meta.url), "../../../index.ts");
 
@@ -55,6 +62,19 @@ class RunManager {
    * refermer, même si le sous-process est déjà mort.
    */
   private terminated = false;
+
+  /**
+   * Une annulation a-t-elle été demandée pour le run courant ? Quand le
+   * sous-process se referme alors que ce flag est posé, on synthétise un
+   * terminal `done` « Recherche annulée » plutôt qu'une erreur de code de sortie.
+   */
+  private canceling = false;
+
+  /**
+   * Minuterie d'escalade SIGKILL armée par `cancel()`. Annulée par `finish()`
+   * dès que le sous-process se referme (le SIGTERM a suffi).
+   */
+  private killTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Un run est-il en cours d'exécution ? (verrou du POST /api/run) */
   get running(): boolean {
@@ -108,11 +128,16 @@ class RunManager {
     // Nouveau run : on repart d'un journal vierge et d'un état non terminé.
     this.eventLog = [];
     this.terminated = false;
+    this.canceling = false;
 
+    // `detached: true` fait du sous-process un LEADER de groupe : son PID est
+    // aussi le PGID. À l'annulation on signale tout le groupe (`-pid`) pour tuer
+    // la chaîne npx → tsx → node → chromium sans laisser de navigateur orphelin.
     const child = spawn("npx", ["tsx", PIPELINE_ENTRY], {
       cwd: resolve(fileURLToPath(import.meta.url), "../../../.."),
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
     });
     this.child = child;
 
@@ -143,7 +168,12 @@ class RunManager {
       // Si le process s'achève sans avoir émis de done/error explicite, on
       // synthétise un événement terminal cohérent avec le code de sortie.
       if (this.child !== null) {
-        if (code === 0) {
+        if (this.canceling && code !== 0) {
+          // Fermeture provoquée par une annulation explicite : terminal neutre.
+          // (Si `code === 0`, le run avait en fait abouti avant le signal : on
+          // retombe sur la branche « run terminé » plutôt que de mentir.)
+          this.finish({ type: "done", message: "Recherche annulée" });
+        } else if (code === 0) {
           this.finish({ type: "done", message: "run terminé" });
         } else {
           this.finish({ type: "error", message: `run interrompu (code ${code ?? "inconnu"})` });
@@ -152,6 +182,52 @@ class RunManager {
     });
 
     return true;
+  }
+
+  /**
+   * Annule le run en cours en tuant son groupe de process. Renvoie false si
+   * aucun run n'est en cours (le caller répondra alors 409). Le terminal `done`
+   * « Recherche annulée » est émis par le handler `close` (cf. flag `canceling`).
+   */
+  cancel(): boolean {
+    if (!this.running || this.child === null) return false;
+
+    this.canceling = true;
+    this.signalGroup("SIGTERM");
+
+    // Escalade : si le groupe ne s'est pas refermé après le délai de grâce
+    // (npx/tsx qui n'ont pas relayé SIGTERM, chromium lent à mourir), on force
+    // en SIGKILL pour garantir la mort du groupe et un `close` rapide.
+    this.killTimer = setTimeout(() => {
+      this.killTimer = null;
+      if (this.child !== null) this.signalGroup("SIGKILL");
+    }, CANCEL_GRACE_MS);
+    if (typeof this.killTimer.unref === "function") this.killTimer.unref();
+
+    return true;
+  }
+
+  /**
+   * Envoie un signal à TOUT le groupe de process du run (`-pid`), avec repli
+   * best-effort sur le seul parent si le groupe n'est pas signalable.
+   */
+  private signalGroup(signal: NodeJS.Signals): void {
+    const child = this.child;
+    if (child === null) return;
+    try {
+      if (typeof child.pid === "number") {
+        process.kill(-child.pid, signal);
+      } else {
+        child.kill(signal);
+      }
+    } catch {
+      // Groupe déjà disparu / non signalable : repli sur le parent.
+      try {
+        child.kill(signal);
+      } catch {
+        /* process déjà mort : le handler `close` fera le ménage */
+      }
+    }
   }
 
   /** Traite une ligne de stdout : extrait et rediffuse les événements `@@RUN`. */
@@ -181,6 +257,12 @@ class RunManager {
     this.terminated = true;
     this.child = null;
 
+    // Le sous-process s'est refermé : l'escalade SIGKILL n'a plus lieu d'être.
+    if (this.killTimer !== null) {
+      clearTimeout(this.killTimer);
+      this.killTimer = null;
+    }
+
     // Le terminal entre au journal : un stream qui se connecte après la fin du
     // run le rejouera et se refermera proprement (cf. subscribe()).
     this.eventLog.push(event);
@@ -199,6 +281,14 @@ export async function registerRunRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/run", async (_request, reply) => {
     if (!manager.start()) {
       return reply.code(423).send({ ok: false, error: "run already in progress" });
+    }
+    return reply.code(202).send({ ok: true });
+  });
+
+  // Annule le run en cours (202) ou refuse si aucun run ne tourne (409).
+  app.post("/api/run/cancel", async (_request, reply) => {
+    if (!manager.cancel()) {
+      return reply.code(409).send({ ok: false, error: "no run in progress" });
     }
     return reply.code(202).send({ ok: true });
   });

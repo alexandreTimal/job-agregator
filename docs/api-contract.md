@@ -116,6 +116,20 @@ mémoire serveur : un seul run à la fois.
 - Réponse `423` (Locked) : `{ "ok": false, "error": "run already in progress" }`
   — un run est déjà en cours.
 
+### POST /api/run/cancel
+
+Annule le run en cours en tuant son groupe de process (npx → tsx → node →
+chromium : pas de navigateur orphelin).
+
+- Corps : aucun.
+- Réponse `202` : `{ "ok": true }` — annulation acceptée.
+- Réponse `409` (Conflict) : `{ "ok": false, "error": "no run in progress" }`
+  — aucun run en cours.
+
+L'annulation se manifeste sur le flux SSE comme un événement terminal `done`
+avec `message: "Recherche annulée"` (et non un `error`) : aucun nouveau type de
+`RunEvent` n'est introduit.
+
 ### GET /api/run/stream (SSE)
 
 Flux Server-Sent Events de progression du run en cours. Chaque message `data:`
