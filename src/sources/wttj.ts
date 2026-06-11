@@ -5,49 +5,41 @@ import { createLogger } from "../lib/logger";
 import { ParseReport, finalizeOffers } from "../lib/parse-report";
 import type { RawScrapeResult, PageDiag } from "../lib/parse-report";
 import { captureFailure } from "../lib/debug-capture";
+import {
+  WTTJ_UA,
+  WTTJ_LOCALE,
+  WTTJ_VIEWPORT,
+  WTTJ_STORAGE_PATH,
+  wttjStorageStateIfPresent,
+} from "./wttj-session";
 
 const logger = createLogger("WTTJ");
 const BASE_URL = "https://www.welcometothejungle.com";
-const SEARCH_PATH = "/fr/jobs";
-const CARD_SELECTOR = '[data-role="jobs:thumb"]';
+// La recherche publique « classique » de WTTJ a été remplacée par un flux de
+// matching qui pousse vers la création de compte (`/fr/jobs?query=…` ne rend
+// plus de liste). Le paramètre `classic-search=1` sur `/fr/jobs-matches`
+// rétablit la liste de résultats consultable sans authentification.
+const SEARCH_PATH = "/fr/jobs-matches";
 
-const CONTRACT_MAP: Record<string, string> = {
-  cdi: "CDI",
-  cdd: "CDD / Temporaire",
-  interim: "CDD / Temporaire",
-  "intérim": "CDD / Temporaire",
-  stage: "Stage",
-  alternance: "Alternance",
-  freelance: "Freelance",
-  vie: "VIE",
-};
-
-const REMOTE_MAP: Record<string, string[]> = {
-  remote: ["fulltime"],
-  hybrid: ["partial", "hybrid"],
-  onsite: [],
-  any: [],
-};
+// Conteneur d'une offre : `data-testid="job-card-<n>"`. Les éléments internes
+// (tags, boutons) portent des testid `job-card-tag-…` / `job-card-…` : on filtre
+// donc sur le motif exact `job-card-<nombre>` pour ne garder que les cartes.
+const CARD_SELECTOR = '[data-testid^="job-card-"]';
 
 function buildSearchUrl(page: number, filters?: SearchFilters): string {
   const params = new URLSearchParams();
+  params.set("classic-search", "1");
 
   if (filters?.keyword) {
-    params.set("query", filters.keyword);
+    params.set("q", filters.keyword);
   }
 
-  if (filters?.contractTypes?.length) {
-    for (const ct of filters.contractTypes) {
-      const mapped = CONTRACT_MAP[ct.toLowerCase()] ?? ct;
-      params.append("refinementList[contract_type_names.fr][]", mapped);
-    }
-  }
-
-  if (filters?.remotePreference && filters.remotePreference !== "any") {
-    const remoteValues = REMOTE_MAP[filters.remotePreference] ?? [];
-    for (const val of remoteValues) {
-      params.append("refinementList[remote][]", val);
-    }
+  // WTTJ classic-search ne prend qu'une ville. Les autres critères (contrat,
+  // remote, salaire) sont volontairement laissés au filtre déterministe en aval
+  // (`src/filter.ts`) : les anciens paramètres Algolia `refinementList[…]` ne
+  // sont plus reconnus par cette page.
+  if (filters?.locations?.length) {
+    params.set("city", filters.locations[0]!.label);
   }
 
   params.set("page", String(page));
@@ -59,20 +51,29 @@ function buildSearchUrl(page: number, filters?: SearchFilters): string {
 interface ScrapePageResult {
   raws: RawScrapeResult[];
   diag: PageDiag;
+  /** `true` si WTTJ a redirigé vers la page de connexion (session expirée/invalide). */
+  redirectedToAuth: boolean;
 }
 
 async function scrapePage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
   url: string,
 ): Promise<ScrapePageResult> {
-  // `domcontentloaded` (et non `networkidle`) : l'app WTTJ (Algolia) maintient
+  // `domcontentloaded` (et non `networkidle`) : l'app WTTJ (Next.js) maintient
   // des requêtes en fond, `networkidle` peut ne jamais être atteint et faire
   // timeout le goto. On charge vite puis on attend explicitement les cartes,
   // ce qui laisse le temps de rendu côté client au sélecteur ci-dessous.
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
 
+  // Session absente/expirée → WTTJ redirige vers /fr/authenticate/signin. On le
+  // détecte tôt pour émettre un message d'auth ciblé (et NE PAS capturer la page
+  // de login comme un faux « sélecteur cassé »).
+  if (page.url().includes("/authenticate/")) {
+    return { raws: [], diag: { cardCount: 0, dropped: { noTitle: 0, noHref: 0 } }, redirectedToAuth: true };
+  }
+
   const cardsAppeared = await page
-    .waitForSelector(CARD_SELECTOR, { timeout: 15_000 })
+    .waitForSelector('[data-testid="job-card-1"]', { timeout: 15_000 })
     .then(() => true)
     .catch(() => false);
 
@@ -80,62 +81,81 @@ async function scrapePage(
     logger.warn("Sélecteur de cartes absent après attente", { selector: CARD_SELECTOR, url });
   }
 
-  // Le comptage des cartes et des rejets se fait DANS le contexte navigateur,
-  // au plus près du DOM, puis remonte sous forme de diagnostic structuré.
+  // Le parsing se fait DANS le contexte navigateur, au plus près du DOM, puis
+  // remonte sous forme de diagnostic structuré.
+  //
+  // NB : tout est inliné (aucune fonction nommée imbriquée). tsx/esbuild enrobe
+  // sinon les fonctions nommées d'un appel `__name(...)` absent du contexte
+  // navigateur, ce qui fait planter `page.evaluate` (`__name is not defined`).
   const { raws, cardCount, dropped } = await page.evaluate(
     ({ baseUrl, cardSelector }) => {
       const results: RawScrapeResult[] = [];
       const dropped = { noTitle: 0, noHref: 0 };
 
-      const cards = document.querySelectorAll(cardSelector);
+      // On ne garde que les vraies cartes `job-card-<nombre>` (les tags internes
+      // partagent le préfixe `job-card-`).
+      const cards = [...document.querySelectorAll(cardSelector)].filter((c) =>
+        /^job-card-\d+$/.test(c.getAttribute("data-testid") ?? ""),
+      );
+
+      // La date est un nœud texte (« 21 mai 2026 » ou « il y a 6 heures ») niché
+      // dans un div aux classes utilitaires instables, SANS testid. Motifs assez
+      // stricts pour ne pas confondre avec « … € par mois » (salaire).
+      const reAbs =
+        /\b\d{1,2}\s+(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre|janv|févr|fevr|juil|sept|oct|nov|déc|dec)\.?\s+(?:19|20)\d{2}\b/i;
+      const reRel = /il y a\s+\d+\s*(?:heure|jour|semaine|mois|an)|aujourd|hier/i;
 
       for (const card of cards) {
         const el = card as HTMLElement;
 
-        const title = el.querySelector("h2")?.textContent?.trim() ?? "";
-        if (!title) {
-          dropped.noTitle++;
-          continue;
-        }
-
-        const href = el.querySelector("a[href*='/jobs/']")?.getAttribute("href");
+        // Le lien titre pointe vers une offre ; il contient le titre (texte
+        // direct) ET l'entreprise (dans un <p>). On isole le titre en retirant le
+        // <p> sur un clone.
+        const titleAnchor = el.querySelector("a[href*='/jobs/']");
+        const href = titleAnchor?.getAttribute("href");
         if (!href) {
           dropped.noHref++;
           continue;
         }
 
-        const company =
-          el
-            .querySelector('[data-testid^="job-thumb-logo-"]')
-            ?.closest("div")?.parentElement?.querySelector("span")
-            ?.textContent?.trim() ?? null;
+        const company = titleAnchor?.querySelector("p")?.textContent?.trim() || null;
 
-        let contractType: string | null = null;
-        let location: string | null = null;
-
-        const metaDivs = el.querySelectorAll("svg[alt]");
-        for (const svg of metaDivs) {
-          const alt = svg.getAttribute("alt");
-          const text = svg.closest("div")?.textContent?.trim() ?? "";
-          if (alt === "Contract" && text) contractType = text;
-          if (alt === "Location" && text) location = text;
+        let title = "";
+        if (titleAnchor) {
+          const clone = titleAnchor.cloneNode(true) as HTMLElement;
+          clone.querySelectorAll("p").forEach((p) => p.remove());
+          title = clone.textContent?.trim() ?? "";
+        }
+        if (!title) {
+          dropped.noTitle++;
+          continue;
         }
 
-        // Date de publication best-effort : on privilégie l'attribut
-        // `datetime` d'un éventuel <time>, sinon le texte affiché.
-        // NB : un `datetime` présent mais vide ("") est traité comme absent
-        // pour ne pas court-circuiter le repli sur le texte.
-        const timeEl = el.querySelector("time");
-        const publishedRaw =
-          (timeEl?.getAttribute("datetime")?.trim() || null) ??
-          timeEl?.textContent?.trim() ??
+        const contractType =
+          el.querySelector('[data-testid="job-card-tag-contract-type"]')?.textContent?.trim() ||
           null;
+        const location =
+          el.querySelector('[data-testid="job-card-tag-location"]')?.textContent?.trim() || null;
+        const salary =
+          el.querySelector('[data-testid="job-card-tag-salary"]')?.textContent?.trim() || null;
+
+        let publishedRaw: string | null = null;
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let node: Node | null;
+        while ((node = walker.nextNode())) {
+          const t = (node.textContent ?? "").trim();
+          if (!t) continue;
+          if (reAbs.test(t) || reRel.test(t)) {
+            publishedRaw = t;
+            break;
+          }
+        }
 
         results.push({
           title,
           company,
           location,
-          salary: null,
+          salary,
           contractType,
           urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
           publishedRaw,
@@ -147,7 +167,7 @@ async function scrapePage(
     { baseUrl: BASE_URL, cardSelector: CARD_SELECTOR },
   );
 
-  return { raws, diag: { cardCount, dropped } };
+  return { raws, diag: { cardCount, dropped }, redirectedToAuth: false };
 }
 
 export const wttjSource: ScrapingSource = {
@@ -156,11 +176,34 @@ export const wttjSource: ScrapingSource = {
   async fetch(options?: FetchOptions): Promise<RawJobOffer[]> {
     const maxPages = options?.maxPages ?? 3;
     const limit = options?.limit;
+
+    // WTTJ a verrouillé sa recherche par mot-clé derrière l'authentification.
+    // Sans session exportée, on ne lance même pas le navigateur : on loggue une
+    // consigne actionnable et on rend [] (best-effort, ne casse pas le run).
+    const storageState = wttjStorageStateIfPresent();
+    if (!storageState) {
+      logger.warn(
+        "Session WTTJ absente : la recherche par mot-clé exige une connexion. " +
+          "Lance `npm run wttj:login` (connexion manuelle, une seule fois).",
+        { attendu: WTTJ_STORAGE_PATH },
+      );
+      return [];
+    }
+
     const browser = await launchBrowser();
     const report = new ParseReport("wttj");
 
     try {
-      const page = await browser.newPage();
+      // Contexte authentifié + réaliste (UA/locale/viewport crédibles). Le
+      // `storageState` rejoue la session : sans lui, `/fr/jobs-matches` redirige
+      // vers la page de connexion.
+      const context = await browser.newContext({
+        storageState,
+        userAgent: WTTJ_UA,
+        locale: WTTJ_LOCALE,
+        viewport: { ...WTTJ_VIEWPORT },
+      });
+      const page = await context.newPage();
       const allOffers: RawJobOffer[] = [];
       const seen = new Set<string>();
 
@@ -168,7 +211,17 @@ export const wttjSource: ScrapingSource = {
         const url = buildSearchUrl(p, options?.filters);
         logger.info(`Scraping page ${p}`, { url });
 
-        const { raws, diag } = await scrapePage(page, url);
+        const { raws, diag, redirectedToAuth } = await scrapePage(page, url);
+
+        if (redirectedToAuth) {
+          logger.warn(
+            "Redirigé vers la page de connexion : session WTTJ expirée ou invalide. " +
+              "Relance `npm run wttj:login` pour la régénérer.",
+            { storageState: WTTJ_STORAGE_PATH },
+          );
+          break;
+        }
+
         report.addPageDiag(diag);
         logger.debug(`Page ${p} lue`, { cartes: diag.cardCount, ignorees: diag.dropped });
 

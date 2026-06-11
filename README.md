@@ -81,9 +81,29 @@ La base Notion cible doit exposer ces propriétés :
 | `Date publication` | Date |
 | `Date relance` | Date |
 
+## Source WTTJ : session requise (connexion unique)
+
+Welcome to the Jungle a déplacé sa **recherche par mot-clé**
+(`/fr/jobs-matches?classic-search=1`) **derrière l'authentification** : un client
+non connecté est redirigé vers la page de connexion. La source WTTJ rejoue donc
+une **session Playwright** que tu exportes **une seule fois** :
+
+```bash
+npm run wttj:login   # ouvre une fenêtre WTTJ → connecte-toi → reviens, Entrée
+```
+
+- Tu te connectes **toi-même** dans la fenêtre ouverte (email/mot de passe ou
+  « Continuer avec … ») : **aucun mot de passe ne transite par le code**.
+- La session est écrite dans `data/wttj-session.json` (gitignored ; surchargeable
+  via `WTTJ_STORAGE_STATE`). À relancer quand elle expire — la source le signale
+  alors par un WARN explicite (« Redirigé vers la page de connexion »).
+- Sans session, WTTJ est **best-effort** : il loggue la consigne et renvoie `[]`
+  sans casser le run.
+- Pré-requis : un environnement **graphique** (le navigateur s'ouvre en visible).
+
 ## Sources
 
-- **MVP** : WTTJ, HelloWork (scraping Playwright + stealth).
+- **MVP** : WTTJ (session requise, ci-dessus), HelloWork (scraping Playwright + stealth).
 - **Phase 1.5** (à porter depuis `Job_watcher/src/sources`) : Indeed, LinkedIn
   (via email forwarding), Google Alerts (RSS), Station F, career pages.
 - **France Travail** (API officielle) : ajoutable trivialement, même interface

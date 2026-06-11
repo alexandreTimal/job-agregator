@@ -114,6 +114,13 @@ fois (2e `POST /api/run` → `423`). Chaque run écrit une ligne dans la table `
   **n'écrit pas** en base, ne filtre pas, ne pousse pas vers Notion.
 - Les sources legacy fragiles (Indeed anti-bot, LinkedIn via email, Google Alerts
   RSS) sont traitées en **best-effort** : une source qui échoue ne casse pas le run.
+- **WTTJ requiert une session authentifiée.** Sa recherche par mot-clé
+  (`/fr/jobs-matches?classic-search=1`) est derrière un login ; la source rejoue
+  un `storageState` Playwright exporté une fois via `npm run wttj:login` (chemin
+  par défaut `data/wttj-session.json`, gitignored ; surchargeable par
+  `WTTJ_STORAGE_STATE`). Constantes partagées login↔scrape dans
+  `src/sources/wttj-session.ts`. Aucun mot de passe ne transite par le code (saisie
+  dans la fenêtre navigateur). Session absente/expirée → WARN actionnable + `[]`.
 
 ### Déduplication
 
