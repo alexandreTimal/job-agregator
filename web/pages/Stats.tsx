@@ -196,7 +196,7 @@ function RepartitionParLabel({ items, unit }: { items: LabeledCount[]; unit: str
         const largeur = Math.round((item.count / max) * 100);
         const part = total > 0 ? Math.round((item.count / total) * 100) : 0;
         return (
-          <div key={item.label} className="min-w-0">
+          <div key={`${item.label}-${idx}`} className="min-w-0">
             <div className="mb-1.5 flex items-baseline justify-between gap-2">
               <span className="truncate text-[0.85rem] font-medium text-[var(--color-ink-soft)]">
                 {item.label}
