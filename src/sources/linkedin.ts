@@ -44,17 +44,31 @@ export function cleanJobUrl(href: string): string {
   }
 }
 
-/** Résultat brut d'une page + diagnostic (cartes vues / ignorées). */
+/**
+ * Sur 0 carte, distingue un blocage/anomalie (à capturer) d'une recherche vide
+ * légitime. L'endpoint guest renvoie un body vide en HTTP 200 quand un terme n'a
+ * aucun résultat (ou en fin de pagination) : ce n'est PAS une panne. Seul un
+ * statut non-2xx (429/403/999…) ou l'absence de réponse trahit un vrai blocage.
+ * Fonction pure.
+ */
+export function isBlockedStatus(status: number | null): boolean {
+  if (status === null) return true;
+  return status < 200 || status >= 300;
+}
+
+/** Résultat brut d'une page + diagnostic (cartes vues / ignorées) + statut HTTP. */
 interface ScrapePageResult {
   raws: RawScrapeResult[];
   diag: PageDiag;
+  status: number | null;
 }
 
 async function scrapePage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
   url: string,
 ): Promise<ScrapePageResult> {
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+  const status = response?.status() ?? null;
 
   // L'endpoint rend un fragment statique : les cartes sont présentes au
   // domcontentloaded. On tente une courte attente du sélecteur, sans bloquer.
@@ -132,7 +146,7 @@ async function scrapePage(
     { origin: ORIGIN, cardSelector: CARD_SELECTOR },
   );
 
-  return { raws, diag: { cardCount, dropped } };
+  return { raws, diag: { cardCount, dropped }, status };
 }
 
 export const linkedinSource: ScrapingSource = {
@@ -179,19 +193,30 @@ export const linkedinSource: ScrapingSource = {
           const url = buildGuestSearchUrl(term, location, start);
           logger.info(`Scraping page ${p}`, { term, url });
 
-          const { raws, diag } = await scrapePage(page, url);
+          const { raws, diag, status } = await scrapePage(page, url);
           report.addPageDiag(diag);
           logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
 
           if (diag.cardCount === 0) {
             if (p === 1) {
-              const artefacts = await captureFailure(page, "linkedin", "zero-cards");
-              logger.warn("0 carte sur la page 1 — sélecteur cassé ou rate-limit LinkedIn", {
-                selector: CARD_SELECTOR,
-                term,
-                url,
-                capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
-              });
+              if (isBlockedStatus(status)) {
+                // Vrai blocage (non-2xx / pas de réponse) : capture pour diagnostic.
+                const artefacts = await captureFailure(page, "linkedin", "zero-cards");
+                logger.warn("0 carte sur la page 1 — sélecteur cassé ou rate-limit LinkedIn", {
+                  selector: CARD_SELECTOR,
+                  term,
+                  url,
+                  status,
+                  capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
+                });
+              } else {
+                // HTTP 2xx + 0 carte = recherche sans résultat (ou fin de pagination) : normal.
+                logger.info("Aucun résultat pour ce terme (réponse vide en succès HTTP)", {
+                  term,
+                  url,
+                  status,
+                });
+              }
             } else {
               logger.info(`Aucune offre page ${p}, arrêt pagination`, { term });
             }
