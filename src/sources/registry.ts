@@ -2,6 +2,7 @@ import type { ScrapingSource } from "../lib/source-interface";
 import { wttjSource } from "./wttj";
 import { helloworkSource } from "./hellowork";
 import { linkedinSource } from "./linkedin";
+import { jobteaserSource } from "./jobteaser";
 import { greenhouseSource } from "./ats/greenhouse";
 import { leverSource } from "./ats/lever";
 
@@ -9,7 +10,7 @@ import { leverSource } from "./ats/lever";
  * Registry des sources. Ajouter une source = créer son fichier (interface
  * ScrapingSource) puis l'ajouter ici.
  *
- * - web : wttj, hellowork (scraping navigateur).
+ * - web : wttj, hellowork, linkedin, jobteaser (scraping navigateur).
  * - ats : greenhouse, lever (API JSON ; boards éditables depuis l'UI via
  *   `settings.atsBoards`). Restent inertes tant qu'aucun board n'est configuré.
  *
@@ -19,6 +20,7 @@ export const sources: ScrapingSource[] = [
   wttjSource,
   helloworkSource,
   linkedinSource,
+  jobteaserSource,
   greenhouseSource,
   leverSource,
 ];

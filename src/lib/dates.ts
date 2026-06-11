@@ -93,6 +93,14 @@ export function parsePublishedAt(raw: string | null | undefined): Date | null {
   // 3) Formes relatives explicites.
   const now = new Date();
   if (/\baujourd/.test(lower)) return now;
+  // « avant-hier » AVANT « hier » : le motif `\bhier\b` matche aussi le « hier »
+  // de « avant-hier » (le trait d'union forme une frontière de mot), ce qui le
+  // résoudrait à tort à J-1. On capte donc J-2 en premier.
+  if (/avant[-\s]?hier/.test(lower)) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 2);
+    return d;
+  }
   if (/\bhier\b/.test(lower)) {
     const d = new Date(now);
     d.setDate(d.getDate() - 1);

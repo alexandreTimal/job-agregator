@@ -34,6 +34,20 @@ test("formes relatives françaises", () => {
   assert.ok(parsePublishedAt("il y a 2 semaines"));
 });
 
+test("« avant-hier » = J-2, distinct de « hier » (J-1)", () => {
+  // Régression : `\bhier\b` matche aussi le « hier » d'« avant-hier ». On vérifie
+  // que la branche dédiée le résout bien à J-2 et non J-1.
+  const ajd = parsePublishedAt("aujourd'hui")!;
+  const hier = parsePublishedAt("hier")!;
+  const avantHier = parsePublishedAt("avant-hier")!;
+  assert.ok(avantHier);
+  const JOUR = 24 * 60 * 60 * 1000;
+  const joursEntre = (a: Date, b: Date) => Math.round((a.getTime() - b.getTime()) / JOUR);
+  assert.equal(joursEntre(ajd, hier), 1);
+  assert.equal(joursEntre(ajd, avantHier), 2);
+  assert.equal(joursEntre(hier, avantHier), 1);
+});
+
 test("non-dates → null (pas de faux positif)", () => {
   assert.equal(ymd("1,3K à 1,6K €par mois"), null); // « mois » du salaire ≠ date
   assert.equal(ymd("Stage"), null);
