@@ -34,6 +34,13 @@ export interface PageDiag {
   cardCount: number;
   /** Cartes ignorées, par raison (`noTitle`, `noHref`…). */
   dropped: Record<string, number>;
+  /**
+   * Offres dont l'employeur est STRUCTURELLEMENT absent de la source (ex. annonces
+   * externes agrégées de HelloWork : aucune entreprise sur la carte). Ces `company`
+   * null sont *attendus* : on les exclut du WARN « sélecteur company cassé » pour
+   * ne pas crier au loup. Défaut 0 ⇒ comportement inchangé pour les autres sources.
+   */
+  companyUnavailable?: number;
 }
 
 /** Champs dont on suit le taux de remplissage (salary exclu : non scrapé partout). */
@@ -41,11 +48,14 @@ const TRACKED_FIELDS = ["company", "location", "contractType", "publishedAt"] as
 export type TrackedField = (typeof TRACKED_FIELDS)[number];
 
 const MAX_DATE_SAMPLES = 10;
+/** Seuil mini d'offres « company » remplies avant de soupçonner une valeur constante. */
+const CONSTANT_MIN_SAMPLES = 3;
 
 export class ParseReport {
   private pages = 0;
   private cards = 0;
   private kept = 0;
+  private companyUnavailable = 0;
   private readonly dropped: Record<string, number> = {};
   private readonly nulls: Record<TrackedField, number> = {
     company: 0,
@@ -53,6 +63,12 @@ export class ParseReport {
     contractType: 0,
     publishedAt: 0,
   };
+  // Valeurs distinctes de `company` (plafonné à 2 : dès qu'on en a 2, ce n'est
+  // plus une constante, inutile d'en garder plus). Sert à détecter le cas
+  // « champ rempli à 100% mais avec une étiquette constante » (placeholder), que
+  // le WARN 100%-null ne voit pas. Limité à `company` : `location`/`contractType`
+  // PEUVENT être légitimement constants (filtre géo/contrat), `company` non.
+  private readonly companyValues = new Set<string>();
   private readonly unparsedDates: string[] = [];
 
   /**
@@ -71,6 +87,7 @@ export class ParseReport {
   addPageDiag(diag: PageDiag): void {
     this.pages++;
     this.cards += diag.cardCount;
+    this.companyUnavailable += diag.companyUnavailable ?? 0;
     for (const [reason, n] of Object.entries(diag.dropped)) {
       this.dropped[reason] = (this.dropped[reason] ?? 0) + n;
     }
@@ -80,6 +97,7 @@ export class ParseReport {
   observe(raw: RawScrapeResult, publishedAt: Date | null): void {
     this.kept++;
     if (!raw.company) this.nulls.company++;
+    else if (this.companyValues.size < 2) this.companyValues.add(raw.company.trim().toLowerCase());
     if (!raw.location) this.nulls.location++;
     if (!raw.contractType) this.nulls.contractType++;
     if (!publishedAt) {
@@ -107,6 +125,7 @@ export class ParseReport {
       conservees: this.kept,
       ignorees: this.dropped,
       remplissage: fill,
+      ...(this.companyUnavailable > 0 ? { employeurAbsent: this.companyUnavailable } : {}),
     });
 
     // Alerte ciblée : champ vide à 100 % alors qu'on a bien lu des offres ⇒
@@ -114,12 +133,31 @@ export class ParseReport {
     for (const field of TRACKED_FIELDS) {
       // Champ non collecté par cette source : null à 100% est attendu, pas un bug.
       if (this.untracked.has(field)) continue;
-      if (this.kept > 0 && this.nulls[field] === this.kept) {
+
+      // Pour `company`, on exclut les offres où l'employeur est structurellement
+      // absent (ex. annonces externes HelloWork) : on ne juge « sélecteur cassé »
+      // que sur les offres qui POUVAIENT exposer une entreprise.
+      const expectedNull = field === "company" ? this.companyUnavailable : 0;
+      const eligible = this.kept - expectedNull;
+      const nulls = this.nulls[field] - expectedNull;
+      if (eligible > 0 && nulls === eligible) {
         logger.warn(
           `Champ '${field}' vide sur 100% des offres — sélecteur probablement cassé`,
-          { source: this.source, offres: this.kept },
+          { source: this.source, offres: eligible },
         );
       }
+    }
+
+    // Alerte « placeholder » : `company` rempli mais avec UNE seule valeur sur de
+    // nombreuses offres ⇒ le sélecteur grappille très probablement une étiquette
+    // fixe (cf. HelloWork « collectivite »). Invisible au WARN 100%-null car le
+    // champ EST rempli. Limité à `company` (seul champ jamais légitimement constant).
+    const companyFilled = this.kept - this.nulls.company;
+    if (companyFilled >= CONSTANT_MIN_SAMPLES && this.companyValues.size === 1) {
+      logger.warn(
+        "Champ 'company' = valeur constante sur toutes les offres — placeholder probable (sélecteur sur une étiquette fixe ?)",
+        { source: this.source, offres: companyFilled, valeur: [...this.companyValues][0] },
+      );
     }
 
     if (this.unparsedDates.length > 0) {

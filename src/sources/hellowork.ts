@@ -89,10 +89,11 @@ async function scrapePage(
     logger.warn("Sélecteur de cartes absent après attente", { selector: CARD_SELECTOR, url });
   }
 
-  const { raws, cardCount, dropped } = await page.evaluate(
+  const { raws, cardCount, dropped, companyUnavailable } = await page.evaluate(
     ({ baseUrl, cardSelector }) => {
       const results: RawScrapeResult[] = [];
       const dropped = { noTitle: 0, noHref: 0 };
+      let companyUnavailable = 0;
 
       const cards = document.querySelectorAll(cardSelector);
 
@@ -112,8 +113,26 @@ async function scrapePage(
           continue;
         }
 
+        // Annonces EXTERNES agrégées : HelloWork n'expose AUCUN employeur sur la
+        // carte (le 2e <p> du titre est un placeholder constant « collectivité »).
+        // On les repère via le payload analytics (product_variant) et on met
+        // company=null plutôt que de stocker une fausse entreprise. Les natives,
+        // elles, gardent leur vrai employeur.
+        let isExternal = false;
+        const apRaw = el.getAttribute("data-analytics-values-param");
+        if (apRaw) {
+          try {
+            const pd = JSON.parse(apRaw).product_data;
+            const item = Array.isArray(pd) ? pd[0] : null;
+            if (item && /EXTERNE/i.test(item.product_variant ?? "")) isExternal = true;
+          } catch {
+            /* analytics absent/illisible : on garde le comportement nominal */
+          }
+        }
+
         const companyEl = el.querySelector('[data-cy="offerTitle"] h3 p:nth-child(2)');
-        const company = companyEl?.textContent?.trim() ?? null;
+        const company = isExternal ? null : (companyEl?.textContent?.trim() ?? null);
+        if (isExternal) companyUnavailable++;
 
         const location =
           el.querySelector('[data-cy="localisationCard"]')?.textContent?.trim() ?? null;
@@ -168,12 +187,12 @@ async function scrapePage(
         });
       }
 
-      return { raws: results, cardCount: cards.length, dropped };
+      return { raws: results, cardCount: cards.length, dropped, companyUnavailable };
     },
     { baseUrl: BASE_URL, cardSelector: CARD_SELECTOR },
   );
 
-  return { raws, diag: { cardCount, dropped } };
+  return { raws, diag: { cardCount, dropped, companyUnavailable } };
 }
 
 export const helloworkSource: ScrapingSource = {

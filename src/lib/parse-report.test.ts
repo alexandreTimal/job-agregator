@@ -84,3 +84,57 @@ test("cas 3 — le bilan INFO 'Bilan parsing' avec remplissage reste émis (comp
   // Le champ untracked reste compté : 0/4 (null partout) malgré la neutralisation du WARN.
   assert.equal(remplissage!.contractType, "0/4");
 });
+
+test("cas 4 — company = valeur constante sur ≥3 offres → WARN placeholder", () => {
+  const { logger, warns } = fakeLogger();
+  const report = new ParseReport("test");
+  report.addPageDiag({ cardCount: 4, dropped: {} });
+  // Même entreprise partout (ex. HelloWork « collectivite ») : champ REMPLI mais
+  // constant ⇒ placeholder probable, invisible au WARN 100%-null.
+  for (let i = 0; i < 4; i++) report.observe(rawWith({ company: "collectivite" }), new Date());
+  report.log(logger);
+
+  assert.equal(warns.filter((w) => w.msg.includes("valeur constante")).length, 1);
+});
+
+test("cas 5 — company varié → PAS de WARN 'valeur constante'", () => {
+  const { logger, warns } = fakeLogger();
+  const report = new ParseReport("test");
+  report.addPageDiag({ cardCount: 3, dropped: {} });
+  ["Amazon", "Onepoint", "Winamax"].forEach((c) =>
+    report.observe(rawWith({ company: c }), new Date()),
+  );
+  report.log(logger);
+
+  assert.equal(warns.filter((w) => w.msg.includes("valeur constante")).length, 0);
+});
+
+test("cas 6 — employeur structurellement absent (externes) : pas de faux WARN 'company cassé'", () => {
+  const { logger, warns, infos } = fakeLogger();
+  const report = new ParseReport("test");
+  // 5 offres : 3 externes (company null ATTENDU) + 2 natives avec employeur.
+  report.addPageDiag({ cardCount: 5, dropped: {}, companyUnavailable: 3 });
+  for (let i = 0; i < 3; i++) report.observe(rawWith({ company: null }), new Date());
+  report.observe(rawWith({ company: "Amazon" }), new Date());
+  report.observe(rawWith({ company: "Winamax" }), new Date());
+  report.log(logger);
+
+  // Les 2 offres ÉLIGIBLES ont un employeur ⇒ aucun WARN « sélecteur cassé ».
+  assert.equal(
+    warns.filter((w) => w.msg.includes("sélecteur probablement cassé") && w.msg.includes("company"))
+      .length,
+    0,
+  );
+  const bilan = infos.find((i) => i.msg === "Bilan parsing");
+  assert.equal(bilan?.meta?.employeurAbsent, 3);
+});
+
+test("cas 7 — toutes les offres externes (company null attendu partout) : aucun WARN company", () => {
+  const { logger, warns } = fakeLogger();
+  const report = new ParseReport("test");
+  report.addPageDiag({ cardCount: 4, dropped: {}, companyUnavailable: 4 });
+  for (let i = 0; i < 4; i++) report.observe(rawWith({ company: null }), new Date());
+  report.log(logger);
+
+  assert.equal(warns.filter((w) => w.msg.includes("company")).length, 0);
+});
