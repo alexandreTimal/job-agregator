@@ -7,13 +7,23 @@ export interface FilterVerdict {
   reason?: string;
 }
 
+/** Nombre de millisecondes dans une journée (calcul d'ancienneté). */
+const MS_PER_DAY = 86_400_000;
+
 /**
  * Filtre 100 % déterministe. Pur : aucune I/O, aucun réseau, aucun LLM.
- * Politique « lenient » : un champ absent (salaire/lieu/contrat null) ne
+ * Politique « lenient » : un champ absent (salaire/lieu/contrat/date null) ne
  * disqualifie jamais — on ne rejette que sur une information présente qui
  * contredit la config.
+ *
+ * `now` est injecté (défaut `Date.now()`) pour garder la fonction pure et
+ * testable malgré le critère d'ancienneté.
  */
-export function passesFilters(offer: RawJobOffer, config: SearchConfig): FilterVerdict {
+export function passesFilters(
+  offer: RawJobOffer,
+  config: SearchConfig,
+  now: number = Date.now(),
+): FilterVerdict {
   const haystack = normalizeText(`${offer.title} ${offer.company ?? ""}`);
 
   // Les types de contrat sélectionnés (ex. "stage", "CDI") font autorité : un
@@ -60,6 +70,17 @@ export function passesFilters(offer: RawJobOffer, config: SearchConfig): FilterV
     });
     if (!cityMatch && !(wantsRemote && isRemote)) {
       return { passed: false, reason: `lieu:${offer.location}` };
+    }
+  }
+
+  // 5) Ancienneté de mise en ligne (lenient si date absente ; 0 = sans limite).
+  // Limite inclusive : une offre pile à `maxOfferAgeDays` jours passe encore.
+  if (config.maxOfferAgeDays && config.maxOfferAgeDays > 0 && offer.publishedAt) {
+    const ageDays = (now - offer.publishedAt.getTime()) / MS_PER_DAY;
+    if (ageDays > config.maxOfferAgeDays) {
+      // `ceil` : un rejet n'est jamais étiqueté ≤ limite (ex. 7.3 j → "age:8",
+      // pas "age:7" qui se lirait comme la limite inclusive qui passe encore).
+      return { passed: false, reason: `age:${Math.ceil(ageDays)}` };
     }
   }
 

@@ -6,6 +6,8 @@
  * - `salaryMin`   : salaire annuel minimum (€) — lenient : une offre sans salaire passe.
  * - `locations`   : villes acceptées + "remote" (lenient : offre sans lieu passe).
  * - `contractTypes`: types de contrat acceptés (lenient : offre sans contrat passe).
+ * - `maxOfferAgeDays`: ancienneté max de mise en ligne, en jours (0 = sans limite,
+ *                    lenient : offre sans date de publication passe).
  * - `remote`      : préférence remote transmise aux sources qui la supportent.
  *
  * Édition = `git diff`. Aucune infra, aucun LLM : filtrage 100 % déterministe.
@@ -16,6 +18,7 @@ export interface SearchConfig {
   salaryMin?: number;
   locations?: string[];
   contractTypes?: string[];
+  maxOfferAgeDays?: number;
   remote?: "onsite" | "hybrid" | "remote" | "any";
   defaultRadiusKm?: number;
   maxPagesPerSource?: number;
@@ -27,6 +30,7 @@ export const config: SearchConfig = {
   salaryMin: 45000,
   locations: ["Paris", "remote"],
   contractTypes: ["CDI"],
+  maxOfferAgeDays: 7,
   remote: "any",
   defaultRadiusKm: 30,
   maxPagesPerSource: 3,
