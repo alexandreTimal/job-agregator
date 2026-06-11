@@ -176,6 +176,13 @@ export const wttjSource: ScrapingSource = {
   async fetch(options?: FetchOptions): Promise<RawJobOffer[]> {
     const maxPages = options?.maxPages ?? 3;
     const limit = options?.limit;
+    // Rétro-compat : si l'appelant ne passe pas `terms`, retomber sur le keyword.
+    const terms = options?.terms?.length
+      ? options.terms
+      : options?.filters?.keyword
+        ? [options.filters.keyword]
+        : [];
+    if (terms.length === 0) return [];
 
     // WTTJ a verrouillé sa recherche par mot-clé derrière l'authentification.
     // Sans session exportée, on ne lance même pas le navigateur : on loggue une
@@ -194,9 +201,6 @@ export const wttjSource: ScrapingSource = {
     const report = new ParseReport("wttj");
 
     try {
-      // Contexte authentifié + réaliste (UA/locale/viewport crédibles). Le
-      // `storageState` rejoue la session : sans lui, `/fr/jobs-matches` redirige
-      // vers la page de connexion.
       const context = await browser.newContext({
         storageState,
         userAgent: WTTJ_UA,
@@ -207,59 +211,59 @@ export const wttjSource: ScrapingSource = {
       const allOffers: RawJobOffer[] = [];
       const seen = new Set<string>();
 
-      for (let p = 1; p <= maxPages; p++) {
-        const url = buildSearchUrl(p, options?.filters);
-        logger.info(`Scraping page ${p}`, { url });
+      termsLoop: for (const term of terms) {
+        const filters: SearchFilters = { ...options?.filters, keyword: term };
 
-        const { raws, diag, redirectedToAuth } = await scrapePage(page, url);
+        for (let p = 1; p <= maxPages; p++) {
+          const url = buildSearchUrl(p, filters);
+          logger.info(`Scraping page ${p}`, { term, url });
 
-        if (redirectedToAuth) {
-          logger.warn(
-            "Redirigé vers la page de connexion : session WTTJ expirée ou invalide. " +
-              "Relance `npm run wttj:login` pour la régénérer.",
-            { storageState: WTTJ_STORAGE_PATH },
-          );
-          break;
-        }
+          const { raws, diag, redirectedToAuth } = await scrapePage(page, url);
 
-        report.addPageDiag(diag);
-        logger.debug(`Page ${p} lue`, { cartes: diag.cardCount, ignorees: diag.dropped });
-
-        if (diag.cardCount === 0) {
-          // 0 carte sur la 1re page = anomalie forte (≠ « plus de résultats » en
-          // pagination profonde) : on fige la page pour pouvoir re-dériver le sélecteur.
-          if (p === 1) {
-            const artefacts = await captureFailure(page, "wttj", "zero-cards");
-            logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
-              selector: CARD_SELECTOR,
-              url,
-              capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
-            });
-          } else {
-            logger.info(`Aucune offre page ${p}, arrêt pagination`);
+          if (redirectedToAuth) {
+            logger.warn(
+              "Redirigé vers la page de connexion : session WTTJ expirée ou invalide. " +
+                "Relance `npm run wttj:login` pour la régénérer.",
+              { storageState: WTTJ_STORAGE_PATH },
+            );
+            break termsLoop;
           }
-          break;
-        }
 
-        const pageOffers = finalizeOffers(raws, "wttj", report);
+          report.addPageDiag(diag);
+          logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
 
-        // Déduplication par URL au sein de ce run.
-        for (const offer of pageOffers) {
-          if (!seen.has(offer.urlSource)) {
-            seen.add(offer.urlSource);
-            allOffers.push(offer);
+          if (diag.cardCount === 0) {
+            if (p === 1) {
+              const artefacts = await captureFailure(page, "wttj", "zero-cards");
+              logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
+                selector: CARD_SELECTOR,
+                term,
+                url,
+                capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
+              });
+            } else {
+              logger.info(`Aucune offre page ${p}, arrêt pagination`, { term });
+            }
+            break; // boucle de pages seulement → terme suivant
           }
+
+          const pageOffers = finalizeOffers(raws, "wttj", report);
+          for (const offer of pageOffers) {
+            if (!seen.has(offer.urlSource)) {
+              seen.add(offer.urlSource);
+              allOffers.push(offer);
+            }
+          }
+
+          if (limit && allOffers.length >= limit) break termsLoop;
+          if (p < maxPages) await page.waitForTimeout(1500);
         }
 
         if (limit && allOffers.length >= limit) break;
-
-        if (p < maxPages) {
-          await page.waitForTimeout(1500);
-        }
+        await page.waitForTimeout(1500); // délai poli entre deux termes
       }
 
       report.log(logger);
-
       const result = limit ? allOffers.slice(0, limit) : allOffers;
       logger.info(`${allOffers.length} offres uniques collectées, ${result.length} renvoyées`);
       return result;

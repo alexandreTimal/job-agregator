@@ -182,44 +182,63 @@ export const helloworkSource: ScrapingSource = {
   async fetch(options?: FetchOptions): Promise<RawJobOffer[]> {
     const maxPages = options?.maxPages ?? 3;
     const limit = options?.limit;
+    // Rétro-compat : si l'appelant ne passe pas `terms`, retomber sur le keyword.
+    const terms = options?.terms?.length
+      ? options.terms
+      : options?.filters?.keyword
+        ? [options.filters.keyword]
+        : [];
+    if (terms.length === 0) return [];
+
     const browser = await launchBrowser();
     const report = new ParseReport("hellowork");
 
     try {
       const page = await browser.newPage();
       const allOffers: RawJobOffer[] = [];
+      const seen = new Set<string>();
 
-      for (let p = 1; p <= maxPages; p++) {
-        const url = buildSearchUrl(p, options?.filters);
-        logger.info(`Scraping page ${p}`, { url });
+      termsLoop: for (const term of terms) {
+        const filters: SearchFilters = { ...options?.filters, keyword: term };
 
-        const { raws, diag } = await scrapePage(page, url);
-        report.addPageDiag(diag);
-        logger.debug(`Page ${p} lue`, { cartes: diag.cardCount, ignorees: diag.dropped });
+        for (let p = 1; p <= maxPages; p++) {
+          const url = buildSearchUrl(p, filters);
+          logger.info(`Scraping page ${p}`, { term, url });
 
-        if (diag.cardCount === 0) {
-          // 0 carte sur la 1re page = anomalie forte : on fige la page pour debug.
-          if (p === 1) {
-            const artefacts = await captureFailure(page, "hellowork", "zero-cards");
-            logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
-              selector: CARD_SELECTOR,
-              url,
-              capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
-            });
-          } else {
-            logger.info(`Aucune offre page ${p}, arrêt pagination`);
+          const { raws, diag } = await scrapePage(page, url);
+          report.addPageDiag(diag);
+          logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
+
+          if (diag.cardCount === 0) {
+            // 0 carte sur la 1re page = anomalie forte : on fige la page pour debug.
+            if (p === 1) {
+              const artefacts = await captureFailure(page, "hellowork", "zero-cards");
+              logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
+                selector: CARD_SELECTOR,
+                term,
+                url,
+                capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
+              });
+            } else {
+              logger.info(`Aucune offre page ${p}, arrêt pagination`, { term });
+            }
+            break; // boucle de pages seulement → terme suivant
           }
-          break;
-        }
 
-        const pageOffers = finalizeOffers(raws, "hellowork", report);
-        allOffers.push(...pageOffers);
+          const pageOffers = finalizeOffers(raws, "hellowork", report);
+          for (const offer of pageOffers) {
+            if (!seen.has(offer.urlSource)) {
+              seen.add(offer.urlSource);
+              allOffers.push(offer);
+            }
+          }
+
+          if (limit && allOffers.length >= limit) break termsLoop;
+          if (p < maxPages) await page.waitForTimeout(1500);
+        }
 
         if (limit && allOffers.length >= limit) break;
-
-        if (p < maxPages) {
-          await page.waitForTimeout(1500);
-        }
+        await page.waitForTimeout(1500); // délai poli entre deux termes
       }
 
       report.log(logger);
