@@ -1,0 +1,247 @@
+/*
+ * Design system global de l'UI locale — direction « control room » sombre,
+ * éditorial-terminal. Tailwind v4 (tokens via @theme) + base + keyframes.
+ *
+ * Trois familles typographiques contrastées :
+ *  - Instrument Serif : grands titres & chiffres-clés (moment éditorial).
+ *  - Hanken Grotesk   : texte d'interface (corps, libellés, boutons).
+ *  - Geist Mono       : données tabulaires (scores, durées, noms de source).
+ */
+@import url("https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Hanken+Grotesk:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
+
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* Tokens de thème (exposés comme utilitaires Tailwind)               */
+/* ------------------------------------------------------------------ */
+@theme {
+  --font-serif: "Instrument Serif", ui-serif, Georgia, serif;
+  --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Surfaces — charbon chaud, légèrement verdâtre */
+  --color-void: #0a0b0a;
+  --color-base: #0e100e;
+  --color-surface: #131613;
+  --color-panel: #161915;
+  --color-panel-2: #1c201b;
+  --color-line: #ffffff14;
+  --color-line-strong: #ffffff26;
+
+  /* Texte — paliers relevés pour passer WCAG AA (4.5:1) sur fond panel/base.
+     ink-faint reste le plus discret mais demeure lisible ; réserver les
+     valeurs sous AA aux seules icônes décoratives. */
+  --color-ink: #f3f4ec;
+  --color-ink-soft: #c2c6ba;
+  --color-ink-mute: #9aa093;
+  --color-ink-faint: #8b9080;
+
+  /* Accent signal — lime/chartreuse */
+  --color-signal: #c8f24c;
+  --color-signal-dim: #9ec43a;
+  --color-signal-glow: #c8f24c40;
+
+  /* Accents secondaires */
+  --color-amber: #f5b549;
+  --color-amber-dim: #c98f2e;
+  --color-danger: #ff6f61;
+  --color-cyan: #6fe3d2;
+
+  --radius-xs: 6px;
+  --radius-sm: 9px;
+  --radius-md: 13px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+
+  --shadow-panel: 0 1px 0 0 #ffffff0d inset, 0 18px 40px -24px #00000080;
+  --shadow-pop: 0 24px 60px -28px #000000cc;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ------------------------------------------------------------------ */
+/* Base                                                               */
+/* ------------------------------------------------------------------ */
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    color: var(--color-ink);
+    background-color: var(--color-base);
+    /* Atmosphère : deux halos froids + grain léger pour la profondeur. */
+    background-image:
+      radial-gradient(900px 600px at 12% -8%, #1c2a14 0%, transparent 55%),
+      radial-gradient(1100px 700px at 108% 4%, #14201f 0%, transparent 50%),
+      radial-gradient(700px 500px at 50% 120%, #15170f 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* Grain procédural appliqué en overlay fixe (très discret). */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.04;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  ::selection {
+    background: var(--color-signal);
+    color: #0a0b0a;
+  }
+
+  /* Focus visible cohérent sur toute l'UI. */
+  :focus-visible {
+    outline: 2px solid var(--color-signal);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Scrollbar discrète façon terminal. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #ffffff40;
+    background-clip: padding-box;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Utilitaires & textures sur-mesure                                  */
+/* ------------------------------------------------------------------ */
+@layer utilities {
+  /* Trame en grille fine pour les fonds de panneaux « instrument ». */
+  .bg-grid {
+    background-image:
+      linear-gradient(var(--color-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-line) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: -1px -1px;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Lueur de texte signal (titres accentués). */
+  .glow-signal {
+    text-shadow: 0 0 24px var(--color-signal-glow);
+  }
+
+  /* Chiffres tabulaires alignés. */
+  .nums {
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
+  }
+
+  .ring-line {
+    box-shadow: 0 0 0 1px var(--color-line) inset;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Keyframes                                                          */
+/* ------------------------------------------------------------------ */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Balayage du faisceau pour la barre de run indéterminée. */
+@keyframes scan {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
+
+/* Remplissage des barres de stats. */
+@keyframes grow-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* Pulsation du point « live ». */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--color-signal-glow);
+  }
+  50% {
+    opacity: 0.65;
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
+/* Apparition en cascade — pilotée par --i sur chaque enfant. */
+.stagger > * {
+  opacity: 0;
+  animation: rise 0.6s var(--ease-out-expo) forwards;
+  animation-delay: calc(var(--i, 0) * 60ms + 80ms);
+}
+
+.animate-rise {
+  animation: rise 0.6s var(--ease-out-expo) both;
+}
+.animate-fade {
+  animation: fade 0.5s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .stagger > * {
+    opacity: 1;
+  }
+}

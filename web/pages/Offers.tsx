@@ -2,27 +2,29 @@
  * Page Offres.
  *
  * Liste les offres (`apiClient.getOffers(filter, sort)`), avec :
- * - un filtre Favoris (`all` | `liked`) et un tri (`recent` | `score`) ;
+ * - un filtre Favoris (`all` | `liked`) ;
  * - sur chaque offre, les actions Liker (POST like) et Supprimer (soft-delete,
  *   retire l'offre de la liste localement) ;
- * - un bouton « Lancer la recherche » (RunButton) qui déclenche le run, suit la
+ * - un panneau de commande (RunButton) qui déclenche le run, suit la
  *   progression via SSE et rafraîchit la liste à la fin.
  *
- * Le tri/filtre côté serveur fait foi (les likées remontent toujours en tête,
- * cf. docs/api-contract.md) ; l'UI ne réordonne pas, elle ré-interroge l'API.
+ * Le tri reste « recent » côté serveur (les likées remontent toujours en tête,
+ * cf. docs/api-contract.md). Le score existe dans le contrat d'API mais n'est
+ * pas surfacé dans l'UI (pipeline non scorant) : pas de tri ni d'affichage.
  */
 import { useCallback, useEffect, useState } from "react";
-import type { Offer, OfferFilter, OfferSort } from "../../src/shared/types";
+import { RefreshCw, Inbox, Star, Layers } from "lucide-react";
+import type { Offer, OfferFilter } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
 import OfferCard from "../components/offers/OfferCard";
 import RunButton from "../components/offers/RunButton";
-import "../components/offers/offers.css";
+import { Segmented } from "@/components/ui/segmented";
+import { cn } from "@/lib/utils";
 
 type EtatChargement = "idle" | "loading" | "ready" | "error";
 
 export default function Offers() {
   const [filtre, setFiltre] = useState<OfferFilter>("all");
-  const [tri, setTri] = useState<OfferSort>("recent");
   const [offres, setOffres] = useState<Offer[]>([]);
   const [etat, setEtat] = useState<EtatChargement>("idle");
   const [erreur, setErreur] = useState<string | null>(null);
@@ -33,14 +35,14 @@ export default function Offers() {
     setEtat("loading");
     setErreur(null);
     try {
-      const liste = await apiClient.getOffers(filtre, tri);
+      const liste = await apiClient.getOffers(filtre, "recent");
       setOffres(liste);
       setEtat("ready");
     } catch (e) {
       setErreur(e instanceof Error ? e.message : "Échec du chargement des offres.");
       setEtat("error");
     }
-  }, [filtre, tri]);
+  }, [filtre]);
 
   useEffect(() => {
     void charger();
@@ -94,66 +96,102 @@ export default function Offers() {
     }
   }
 
+  const vide = etat === "ready" && offres.length === 0;
+
   return (
-    <section className="offers-page" aria-label="Offres">
+    <section aria-label="Offres" aria-busy={etat === "loading"} className="flex flex-col gap-6">
       <RunButton onRunFinished={charger} />
 
-      <div className="offers-page__toolbar">
-        <label>
-          Affichage
-          <select
-            value={filtre}
-            onChange={(e) => setFiltre(e.target.value as OfferFilter)}
+      {/* Barre d'outils : filtre + compteur + rafraîchir */}
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented<OfferFilter>
+          aria-label="Filtrer les offres"
+          value={filtre}
+          onChange={setFiltre}
+          options={[
+            { value: "all", label: "Toutes", icon: <Inbox /> },
+            { value: "liked", label: "Favoris", icon: <Star /> },
+          ]}
+        />
+
+        <div className="ml-auto flex items-center gap-3">
+          <span
+            role="status"
+            aria-live="polite"
+            className="font-[family-name:var(--font-mono)] text-[0.78rem] text-[var(--color-ink-mute)]"
           >
-            <option value="all">Toutes</option>
-            <option value="liked">Favoris</option>
-          </select>
-        </label>
-
-        <label>
-          Tri
-          <select value={tri} onChange={(e) => setTri(e.target.value as OfferSort)}>
-            <option value="recent">Plus récentes</option>
-            <option value="score">Meilleur score</option>
-          </select>
-        </label>
-
-        <button type="button" onClick={() => void charger()} disabled={etat === "loading"}>
-          Rafraîchir
-        </button>
+            {etat === "ready" ? `${offres.length} offre${offres.length > 1 ? "s" : ""}` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => void charger()}
+            disabled={etat === "loading"}
+            aria-label="Rafraîchir la liste"
+            className="grid size-9 place-items-center rounded-[var(--radius-sm)] border border-[var(--color-line)] text-[var(--color-ink-mute)] transition-colors hover:border-[var(--color-line-strong)] hover:text-[var(--color-ink)] disabled:opacity-40"
+          >
+            <RefreshCw aria-hidden="true" className={cn("size-4", etat === "loading" && "animate-spin")} />
+          </button>
+        </div>
       </div>
 
-      {etat === "loading" && <p className="offers-page__state">Chargement des offres…</p>}
-      {etat === "error" && (
-        <p className="offers-page__error" role="alert">
-          {erreur}
-        </p>
+      {/* États */}
+      {etat === "loading" && offres.length === 0 && (
+        <div aria-hidden="true" className="flex flex-col gap-3">
+          {[0, 1, 2, 3].map((i) => (
+            <div
+              key={i}
+              className="h-[88px] animate-pulse rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel)]/40"
+              style={{ animationDelay: `${i * 90}ms` }}
+            />
+          ))}
+        </div>
       )}
-      {etat === "ready" && offres.length === 0 && (
-        <p className="offers-page__state">
-          {filtre === "liked" ? "Aucun favori pour le moment." : "Aucune offre à afficher."}
-        </p>
-      )}
-      {/* Erreur survenue après un premier chargement réussi (like/delete). */}
-      {etat === "ready" && erreur && (
-        <p className="offers-page__error" role="alert">
+
+      {/* Erreur (chargement initial OU action like/delete) — états mutuellement exclusifs. */}
+      {erreur && (
+        <div
+          role="alert"
+          className="rounded-[var(--radius-md)] border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-4 py-3 text-sm text-[var(--color-danger)]"
+        >
           {erreur}
-        </p>
+        </div>
+      )}
+
+      {vide && (
+        <div className="grid place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--color-line-strong)] bg-[var(--color-panel)]/30 px-6 py-16 text-center">
+          <div
+            aria-hidden="true"
+            className="grid size-12 place-items-center rounded-full border border-[var(--color-line)] bg-black/20 text-[var(--color-ink-mute)]"
+          >
+            {filtre === "liked" ? <Star className="size-5" /> : <Layers className="size-5" />}
+          </div>
+          <p className="mt-4 text-[0.95rem] font-medium text-[var(--color-ink-soft)]">
+            {filtre === "liked" ? "Aucun favori pour le moment" : "Aucune offre à afficher"}
+          </p>
+          <p className="mt-1 max-w-xs text-sm text-[var(--color-ink-mute)]">
+            {filtre === "liked"
+              ? "Marquez des offres d'une étoile pour les retrouver ici."
+              : "Lancez une collecte pour peupler le flux."}
+          </p>
+        </div>
       )}
 
       {offres.length > 0 && (
-        <ul className="offers-page__list">
-          {offres.map((offre) => (
-            <li key={offre.id}>
-              <OfferCard
-                offre={offre}
-                enCours={actionsEnCours.has(offre.id)}
-                onToggleLike={basculerFavori}
-                onDelete={supprimer}
-              />
-            </li>
-          ))}
-        </ul>
+        <>
+          <h2 className="sr-only">Liste des offres</h2>
+          <ul className="stagger flex flex-col gap-2.5">
+            {offres.map((offre, i) => (
+              <li key={offre.id} style={{ "--i": Math.min(i, 12) } as React.CSSProperties}>
+                <OfferCard
+                  offre={offre}
+                  enCours={actionsEnCours.has(offre.id)}
+                  onToggleLike={basculerFavori}
+                  onDelete={supprimer}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </section>
   );

@@ -1,16 +1,16 @@
 /**
- * Carte d'une offre dans la liste (lane Offres).
+ * Carte d'une offre (lane Offres) — version control-room.
  *
- * Affiche le titre (lien vers l'offre), le logo de la source, l'entreprise/lieu
- * et l'ancienneté (`publishedAt ?? firstSeenAt` rendue en « il y a X »).
- * Expose deux actions : Liker (bascule favori) et Supprimer (soft-delete).
- *
- * Composant purement présentationnel : il ne fait aucun appel réseau, il
- * remonte les intentions à la page via `onToggleLike` / `onDelete`.
+ * Présentationnel pur : aucun appel réseau, remonte les intentions via
+ * `onToggleLike` / `onDelete`. Affiche logo de source (avec repli monogramme),
+ * titre cliquable, méta (entreprise/lieu) et ancienneté. Le rail gauche s'allume
+ * au survol (signal) ou en favori (ambre).
  */
 import { useEffect, useState } from "react";
+import { Heart, Trash2, ArrowUpRight, MapPin, Building2 } from "lucide-react";
 import type { Offer } from "../../../src/shared/types";
 import { ancienneteRelative } from "./relative-time";
+import { cn } from "@/lib/utils";
 
 interface OfferCardProps {
   offre: Offer;
@@ -20,72 +20,140 @@ interface OfferCardProps {
   onDelete: (offre: Offer) => void;
 }
 
-/** Logo local de la source (assets public/logos/{source}.svg). */
 function logoSource(source: string): string {
   return `/logos/${source}.svg`;
 }
 
 export default function OfferCard({ offre, enCours, onToggleLike, onDelete }: OfferCardProps) {
   const date = offre.publishedAt ?? offre.firstSeenAt;
-  /** True si le logo de la source n'a pas pu être chargé (asset manquant). */
   const [logoCasse, setLogoCasse] = useState(false);
 
-  // L'élément <img> est réutilisé par React (key={offre.id}) si la source change ;
-  // on réinitialise alors l'état « cassé » pour retenter le chargement du nouveau logo.
   useEffect(() => {
     setLogoCasse(false);
   }, [offre.source]);
 
   return (
-    <article className={`offer-card${offre.liked ? " offer-card--liked" : ""}`}>
-      {!logoCasse && (
-        <img
-          className="offer-card__logo"
-          src={logoSource(offre.source)}
-          alt={`Logo ${offre.source}`}
-          width={32}
-          height={32}
-          loading="lazy"
-          /* Si le logo manque, on masque l'image cassée sans bruit, via l'état React. */
-          onError={() => setLogoCasse(true)}
-        />
+    <article
+      className={cn(
+        "group relative flex items-stretch gap-4 overflow-hidden rounded-[var(--radius-md)] border p-4 pl-5",
+        "transition-all duration-300 ease-[var(--ease-out-expo)]",
+        offre.liked
+          ? "border-[var(--color-amber)]/35 bg-[var(--color-amber)]/[0.04]"
+          : "border-[var(--color-line)] bg-[var(--color-panel)]/55 hover:border-[var(--color-line-strong)] hover:bg-[var(--color-panel-2)]/70",
       )}
+    >
+      {/* Rail gauche : favori (ambre) sinon survol (signal) */}
+      <span
+        aria-hidden="true"
+        className={cn(
+          "absolute left-0 top-0 h-full w-[3px] transition-all duration-300",
+          offre.liked
+            ? "bg-[var(--color-amber)]"
+            : "bg-[var(--color-signal)] opacity-0 group-hover:opacity-70",
+        )}
+      />
 
-      <div className="offer-card__body">
-        <h3 className="offer-card__title">
-          <a href={offre.url} target="_blank" rel="noopener noreferrer">
-            {offre.title}
-          </a>
-        </h3>
-        <p className="offer-card__meta">
-          {offre.company && <span className="offer-card__company">{offre.company}</span>}
-          {offre.location && <span className="offer-card__location">{offre.location}</span>}
-          <span className="offer-card__source">{offre.source}</span>
-        </p>
-        <p className="offer-card__age">
-          <time dateTime={date}>{ancienneteRelative(date)}</time>
-        </p>
+      {/* Logo / monogramme de source */}
+      <div className="flex shrink-0 items-start pt-0.5">
+        <div className="grid size-11 place-items-center overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-line)] bg-black/30">
+          {logoCasse ? (
+            <span
+              aria-hidden="true"
+              className="font-[family-name:var(--font-mono)] text-sm font-semibold uppercase text-[var(--color-ink-mute)]"
+            >
+              {offre.source.slice(0, 2)}
+            </span>
+          ) : (
+            <img
+              className="size-7 object-contain"
+              src={logoSource(offre.source)}
+              alt=""
+              width={28}
+              height={28}
+              loading="lazy"
+              onError={() => setLogoCasse(true)}
+            />
+          )}
+        </div>
       </div>
 
-      <div className="offer-card__actions">
+      {/* Corps */}
+      <div className="min-w-0 flex-1">
+        <h3 className="pr-2 text-[0.98rem] font-semibold leading-snug">
+          <a
+            href={offre.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-baseline gap-1 text-[var(--color-ink)] transition-colors hover:text-[var(--color-signal)]"
+          >
+            <span className="text-balance">{offre.title}</span>
+            <ArrowUpRight
+              aria-hidden="true"
+              className="size-3.5 shrink-0 self-center text-[var(--color-ink-faint)] transition-colors group-hover:text-[var(--color-signal)]"
+            />
+            <span className="sr-only"> (ouvre l'offre dans un nouvel onglet)</span>
+          </a>
+        </h3>
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.82rem] text-[var(--color-ink-soft)]">
+          {offre.company && (
+            <span className="inline-flex items-center gap-1.5">
+              <Building2 aria-hidden="true" className="size-3.5 text-[var(--color-ink-faint)]" />
+              {offre.company}
+            </span>
+          )}
+          {offre.location && (
+            <span className="inline-flex items-center gap-1.5">
+              <MapPin aria-hidden="true" className="size-3.5 text-[var(--color-ink-faint)]" />
+              {offre.location}
+            </span>
+          )}
+        </div>
+
+        <div className="mt-2.5 flex items-center gap-3">
+          <span className="font-[family-name:var(--font-mono)] text-[0.72rem] uppercase tracking-wide text-[var(--color-ink-mute)]">
+            {offre.source}
+          </span>
+          <span aria-hidden="true" className="size-1 rounded-full bg-[var(--color-line-strong)]" />
+          <time
+            dateTime={date}
+            className="font-[family-name:var(--font-mono)] text-[0.72rem] text-[var(--color-ink-mute)]"
+          >
+            {ancienneteRelative(date)}
+          </time>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex shrink-0 flex-col items-end justify-center gap-1.5">
         <button
           type="button"
-          className="offer-card__like"
           aria-pressed={offre.liked}
+          aria-label={offre.liked ? "Retirer des favoris" : "Ajouter aux favoris"}
           disabled={enCours}
-          title={offre.liked ? "Retirer des favoris" : "Ajouter aux favoris"}
           onClick={() => onToggleLike(offre)}
+          className={cn(
+            "grid size-9 place-items-center rounded-[var(--radius-xs)] border transition-all duration-200",
+            "disabled:cursor-progress disabled:opacity-40",
+            offre.liked
+              ? "border-[var(--color-amber)]/40 bg-[var(--color-amber)]/15 text-[var(--color-amber)]"
+              : "border-[var(--color-line)] text-[var(--color-ink-mute)] hover:border-[var(--color-amber)]/40 hover:text-[var(--color-amber)]",
+          )}
         >
-          {offre.liked ? "★ Favori" : "☆ Liker"}
+          <Heart aria-hidden="true" className={cn("size-4", offre.liked && "fill-current")} />
         </button>
         <button
           type="button"
-          className="offer-card__delete"
+          aria-label="Supprimer cette offre"
           disabled={enCours}
-          title="Supprimer cette offre"
           onClick={() => onDelete(offre)}
+          className={cn(
+            "grid size-9 place-items-center rounded-[var(--radius-xs)] border border-[var(--color-line)] text-[var(--color-ink-mute)] transition-all duration-200",
+            "hover:border-[var(--color-danger)]/40 hover:bg-[var(--color-danger)]/10 hover:text-[var(--color-danger)]",
+            "disabled:cursor-progress disabled:opacity-40",
+          )}
         >
-          Supprimer
+          <Trash2 aria-hidden="true" className="size-4" />
         </button>
       </div>
     </article>

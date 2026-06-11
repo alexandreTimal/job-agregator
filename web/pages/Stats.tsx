@@ -7,16 +7,15 @@
  * - répartition des offres par source (avec logo local) ;
  * - historique des derniers runs (table `runs`).
  *
- * Aucune dépendance de graphes : les barres de répartition sont de simples
- * <div> dimensionnées en pourcentage. Toute la mise en forme est inline pour
- * rester confinée à cette lane (aucune feuille de style partagée à modifier).
- *
- * Données chargées via le client API typé (`web/lib/api-client.ts`), qui
- * fonctionne aussi en mode MOCK (VITE_MOCK=1) tant que le backend n'existe pas.
+ * Données chargées via le client API typé (`web/lib/api-client.ts`).
  */
 import { useEffect, useState } from "react";
-import type { Run, Stats as StatsData } from "../../src/shared/types";
+import { CalendarDays, CalendarRange, CopyX, Timer, Search, Sparkles } from "lucide-react";
+import type { Run, Stats as StatsData, SourceCount } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /* Aides de formatage (déterministes, pures)                          */
@@ -35,9 +34,19 @@ function formatDuree(durationMs: number | null): string {
   return `${minutes} min ${reste.toString().padStart(2, "0")} s`;
 }
 
-/** Formate une date ISO en date + heure locales lisibles. */
+/**
+ * Formate une date en date + heure locales lisibles.
+ *
+ * Robustesse : le backend peut renvoyer un format non strictement ISO
+ * (« 2026-06-11 12:35:08 », sans T ni Z), que certains navigateurs parsent en
+ * NaN ou interprètent diversement (UTC vs local). On extrait donc les champs à
+ * la main quand le format le permet, avec repli sur `new Date`.
+ */
 function formatDateHeure(iso: string): string {
-  const date = new Date(iso);
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
+  const date = m
+    ? new Date(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, m[6] ? +m[6] : 0)
+    : new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString("fr-FR", {
     day: "2-digit",
@@ -48,162 +57,102 @@ function formatDateHeure(iso: string): string {
   });
 }
 
-/** Résumé textuel des offres par source d'un run (« wttj 30, hellowork 20 »). */
-function resumePerSource(perSource: Run["perSource"]): string {
-  const entrees = Object.entries(perSource);
-  if (entrees.length === 0) return "—";
-  return entrees.map(([source, count]) => `${source} ${count}`).join(", ");
-}
-
-/* ------------------------------------------------------------------ */
-/* Styles inline confinés à la lane                                   */
-/* ------------------------------------------------------------------ */
-
-const styles = {
-  section: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "1.75rem",
-  },
-  cards: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-    gap: "1rem",
-  },
-  card: {
-    border: "1px solid #e2e2e2",
-    borderRadius: "8px",
-    padding: "1rem 1.25rem",
-    background: "#fafafa",
-  },
-  cardValue: {
-    fontSize: "2rem",
-    fontWeight: 700,
-    lineHeight: 1.1,
-  },
-  cardLabel: {
-    marginTop: "0.35rem",
-    color: "#555",
-    fontSize: "0.9rem",
-  },
-  blockTitle: {
-    margin: "0 0 0.75rem",
-    fontSize: "1.05rem",
-  },
-  sourceRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.6rem",
-    marginBottom: "0.55rem",
-  },
-  sourceLogo: {
-    width: "20px",
-    height: "20px",
-    objectFit: "contain",
-    flex: "0 0 auto",
-  },
-  sourceName: {
-    width: "110px",
-    flex: "0 0 auto",
-    fontSize: "0.9rem",
-  },
-  barTrack: {
-    flex: "1 1 auto",
-    height: "14px",
-    background: "#ececec",
-    borderRadius: "7px",
-    overflow: "hidden",
-  },
-  barFill: {
-    height: "100%",
-    background: "#4f7cff",
-    borderRadius: "7px",
-  },
-  sourceCount: {
-    width: "44px",
-    flex: "0 0 auto",
-    textAlign: "right",
-    fontVariantNumeric: "tabular-nums",
-    fontSize: "0.9rem",
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: "0.9rem",
-  },
-  th: {
-    textAlign: "left",
-    borderBottom: "2px solid #ddd",
-    padding: "0.5rem 0.6rem",
-    color: "#555",
-    fontWeight: 600,
-  },
-  td: {
-    borderBottom: "1px solid #eee",
-    padding: "0.5rem 0.6rem",
-    verticalAlign: "top",
-  },
-  tdNum: {
-    fontVariantNumeric: "tabular-nums",
-    textAlign: "right" as const,
-  },
-  empty: {
-    color: "#777",
-    fontStyle: "italic",
-  },
-  state: {
-    color: "#555",
-  },
-  error: {
-    color: "#b00020",
-  },
-} as const;
-
 /* ------------------------------------------------------------------ */
 /* Sous-composants                                                    */
 /* ------------------------------------------------------------------ */
 
-/** Carte de chiffre clé (aujourd'hui / semaine / doublons). */
-function StatCard({ value, label }: { value: number; label: string }) {
+/** Carte de chiffre-clé : grand nombre serif + libellé mono + icône. */
+function StatCard({
+  value,
+  label,
+  icon,
+  accent,
+  i,
+}: {
+  value: number;
+  label: string;
+  icon: React.ReactNode;
+  accent: "signal" | "amber" | "mute";
+  i: number;
+}) {
+  const tone =
+    accent === "signal"
+      ? "text-[var(--color-signal)]"
+      : accent === "amber"
+        ? "text-[var(--color-amber)]"
+        : "text-[var(--color-ink-soft)]";
   return (
-    <div style={styles.card}>
-      <div style={styles.cardValue}>{value.toLocaleString("fr-FR")}</div>
-      <div style={styles.cardLabel}>{label}</div>
-    </div>
+    <Card
+      role="group"
+      aria-label={`${label} : ${value.toLocaleString("fr-FR")}`}
+      style={{ "--i": i } as React.CSSProperties}
+      className="relative overflow-hidden p-5"
+    >
+      <div className="bg-grid pointer-events-none absolute inset-0 opacity-20" aria-hidden="true" />
+      {/* Contenu visuel ignoré du lecteur d'écran : l'aria-label du groupe le résume. */}
+      <div aria-hidden="true" className="relative flex items-start justify-between">
+        <span
+          className={cn(
+            "grid size-9 place-items-center rounded-[var(--radius-sm)] border border-[var(--color-line)] bg-black/30 [&_svg]:size-[1.05rem]",
+            tone,
+          )}
+        >
+          {icon}
+        </span>
+      </div>
+      <div aria-hidden="true" className="relative mt-5">
+        <div className={cn("font-[family-name:var(--font-serif)] text-[3rem] leading-none", tone)}>
+          {value.toLocaleString("fr-FR")}
+        </div>
+        <div className="mt-2 font-[family-name:var(--font-mono)] text-[0.72rem] uppercase tracking-[0.12em] text-[var(--color-ink-mute)]">
+          {label}
+        </div>
+      </div>
+    </Card>
   );
 }
 
-/** Répartition des offres par source, sous forme de barres horizontales. */
-function RepartitionParSource({ bySource }: { bySource: StatsData["bySource"] }) {
+/** Répartition des offres par source — barres animées + logo + monogramme de repli. */
+function RepartitionParSource({ bySource }: { bySource: SourceCount[] }) {
   if (bySource.length === 0) {
-    return <p style={styles.empty}>Aucune offre enregistrée pour le moment.</p>;
+    return (
+      <p className="px-1 py-6 text-center text-sm italic text-[var(--color-ink-mute)]">
+        Aucune offre enregistrée pour le moment.
+      </p>
+    );
   }
-  // Échelle relative au max pour des barres comparables.
   const max = Math.max(...bySource.map((s) => s.count), 1);
+  const total = bySource.reduce((acc, s) => acc + s.count, 0);
   return (
-    <div>
-      {bySource.map((s) => {
+    <div className="flex flex-col gap-4">
+      {bySource.map((s, idx) => {
         const pourcentage = Math.round((s.count / max) * 100);
+        const part = total > 0 ? Math.round((s.count / total) * 100) : 0;
         return (
-          <div key={s.source} style={styles.sourceRow}>
-            <img
-              src={s.logo}
-              alt=""
-              style={styles.sourceLogo}
-              // Si le logo manque, on masque l'image sans casser la ligne.
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.visibility = "hidden";
-              }}
-            />
-            <span style={styles.sourceName}>{s.source}</span>
-            <span
-              style={styles.barTrack}
-              role="img"
-              aria-label={`${s.source} : ${s.count} offres`}
-            >
-              <span style={{ ...styles.barFill, width: `${pourcentage}%` }} />
-            </span>
-            <span style={styles.sourceCount}>{s.count.toLocaleString("fr-FR")}</span>
+          <div key={s.source} className="flex items-center gap-3.5">
+            <SourceLogo source={s.source} logo={s.logo} />
+            <div className="min-w-0 flex-1">
+              <div className="mb-1.5 flex items-baseline justify-between gap-2">
+                <span className="truncate text-[0.85rem] font-medium text-[var(--color-ink-soft)]">
+                  {s.source}
+                </span>
+                <span className="shrink-0 font-[family-name:var(--font-mono)] text-[0.75rem] text-[var(--color-ink-mute)]">
+                  {s.count.toLocaleString("fr-FR")}
+                  <span className="ml-1.5 text-[var(--color-ink-faint)]">{part}%</span>
+                </span>
+              </div>
+              <span
+                className="block h-2 overflow-hidden rounded-full bg-black/40"
+                role="img"
+                aria-label={`${s.source} : ${s.count} offre${s.count > 1 ? "s" : ""} (${part}% du total)`}
+              >
+                <span
+                  aria-hidden="true"
+                  className="block h-full origin-left rounded-full bg-gradient-to-r from-[var(--color-signal-dim)] to-[var(--color-signal)] [animation:grow-x_0.9s_var(--ease-out-expo)_both]"
+                  style={{ width: `${pourcentage}%`, animationDelay: `${idx * 80 + 120}ms` }}
+                />
+              </span>
+            </div>
           </div>
         );
       })}
@@ -211,36 +160,118 @@ function RepartitionParSource({ bySource }: { bySource: StatsData["bySource"] })
   );
 }
 
-/** Historique des derniers runs sous forme de table. */
+/** Logo de source avec repli monogramme si l'asset manque. */
+function SourceLogo({ source, logo }: { source: string; logo: string }) {
+  const [casse, setCasse] = useState(false);
+  return (
+    <div className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-line)] bg-black/30">
+      {casse ? (
+        <span className="font-[family-name:var(--font-mono)] text-xs font-semibold uppercase text-[var(--color-ink-mute)]">
+          {source.slice(0, 2)}
+        </span>
+      ) : (
+        <img
+          src={logo}
+          alt=""
+          width={22}
+          height={22}
+          className="size-[22px] object-contain"
+          onError={() => setCasse(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Mini-statistique d'un run (libellé mono + valeur). */
+function RunMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "signal" | "amber";
+}) {
+  return (
+    <div className="flex flex-col">
+      <span className="font-[family-name:var(--font-mono)] text-[0.68rem] uppercase tracking-wider text-[var(--color-ink-mute)]">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "font-[family-name:var(--font-mono)] text-[0.95rem] font-semibold",
+          tone === "signal"
+            ? "text-[var(--color-signal)]"
+            : tone === "amber"
+              ? "text-[var(--color-amber)]"
+              : "text-[var(--color-ink)]",
+        )}
+      >
+        {value.toLocaleString("fr-FR")}
+      </span>
+    </div>
+  );
+}
+
+/** Historique des derniers runs sous forme de cartes empilées. */
 function DerniersRuns({ runs }: { runs: Run[] }) {
   if (runs.length === 0) {
-    return <p style={styles.empty}>Aucun run enregistré pour le moment.</p>;
+    return (
+      <p className="px-1 py-6 text-center text-sm italic text-[var(--color-ink-mute)]">
+        Aucun run enregistré pour le moment.
+      </p>
+    );
   }
   return (
-    <table style={styles.table}>
-      <thead>
-        <tr>
-          <th style={styles.th}>Date</th>
-          <th style={{ ...styles.th, textAlign: "right" }}>Durée</th>
-          <th style={{ ...styles.th, textAlign: "right" }}>Trouvées</th>
-          <th style={{ ...styles.th, textAlign: "right" }}>Nouvelles</th>
-          <th style={{ ...styles.th, textAlign: "right" }}>Doublons</th>
-          <th style={styles.th}>Par source</th>
-        </tr>
-      </thead>
-      <tbody>
-        {runs.map((run) => (
-          <tr key={run.id}>
-            <td style={styles.td}>{formatDateHeure(run.startedAt)}</td>
-            <td style={{ ...styles.td, ...styles.tdNum }}>{formatDuree(run.durationMs)}</td>
-            <td style={{ ...styles.td, ...styles.tdNum }}>{run.found.toLocaleString("fr-FR")}</td>
-            <td style={{ ...styles.td, ...styles.tdNum }}>{run.new.toLocaleString("fr-FR")}</td>
-            <td style={{ ...styles.td, ...styles.tdNum }}>{run.duplicates.toLocaleString("fr-FR")}</td>
-            <td style={styles.td}>{resumePerSource(run.perSource)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="flex flex-col gap-2.5">
+      {runs.map((run) => {
+        // N'afficher que les sources ayant réellement rapporté des offres.
+        const sources = Object.entries(run.perSource).filter(([, count]) => count > 0);
+        return (
+          <div
+            key={run.id}
+            className="rounded-[var(--radius-md)] border border-[var(--color-line)] bg-black/15 p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <Timer className="size-4 text-[var(--color-ink-faint)]" />
+                <span className="font-[family-name:var(--font-mono)] text-[0.8rem] text-[var(--color-ink-soft)]">
+                  {formatDateHeure(run.startedAt)}
+                </span>
+                <Badge tone="mono">{formatDuree(run.durationMs)}</Badge>
+              </div>
+              <div className="flex items-center gap-5">
+                <RunMetric label="Trouvées" value={run.found} />
+                <RunMetric label="Nouvelles" value={run.new} tone="signal" />
+                <RunMetric label="Doublons" value={run.duplicates} tone="amber" />
+              </div>
+            </div>
+            {sources.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[var(--color-line)] pt-3">
+                {sources.map(([source, count]) => (
+                  <Badge key={source} tone="neutral">
+                    <span className="text-[var(--color-ink-faint)]">{source}</span>
+                    <span className="font-[family-name:var(--font-mono)] text-[var(--color-ink-soft)]">
+                      {count}
+                    </span>
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <h2 className="mb-4 flex items-center gap-2.5 text-[0.78rem] font-semibold uppercase tracking-[0.14em] text-[var(--color-ink-mute)] [&_svg]:size-4 [&_svg]:text-[var(--color-ink-faint)]">
+      {icon}
+      {children}
+    </h2>
   );
 }
 
@@ -276,8 +307,18 @@ export default function Stats() {
 
   if (etat.statut === "chargement") {
     return (
-      <section aria-label="Statistiques" aria-busy="true">
-        <p style={styles.state}>Chargement des statistiques…</p>
+      <section aria-label="Statistiques" aria-busy="true" className="flex flex-col gap-6">
+        <span className="sr-only">Chargement des statistiques…</span>
+        <div aria-hidden="true" className="grid gap-4 sm:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="h-[148px] animate-pulse rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)]/40"
+              style={{ animationDelay: `${i * 90}ms` }}
+            />
+          ))}
+        </div>
+        <div aria-hidden="true" className="h-64 animate-pulse rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)]/40" />
       </section>
     );
   }
@@ -285,9 +326,12 @@ export default function Stats() {
   if (etat.statut === "erreur") {
     return (
       <section aria-label="Statistiques">
-        <p style={styles.error}>
+        <div
+          role="alert"
+          className="rounded-[var(--radius-md)] border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-4 py-3 text-sm text-[var(--color-danger)]"
+        >
           Impossible de charger les statistiques : {etat.message}
-        </p>
+        </div>
       </section>
     );
   }
@@ -295,21 +339,23 @@ export default function Stats() {
   const { today, week, duplicates, bySource, lastRuns } = etat.data;
 
   return (
-    <section aria-label="Statistiques" style={styles.section}>
-      <div style={styles.cards}>
-        <StatCard value={today} label="Offres trouvées aujourd'hui" />
-        <StatCard value={week} label="Offres trouvées cette semaine" />
-        <StatCard value={duplicates} label="Doublons rencontrés" />
+    <section aria-label="Statistiques" className="flex flex-col gap-8">
+      <div className="stagger grid gap-4 sm:grid-cols-3">
+        <StatCard value={today} label="Trouvées aujourd'hui" icon={<CalendarDays />} accent="signal" i={0} />
+        <StatCard value={week} label="Trouvées cette semaine" icon={<CalendarRange />} accent="mute" i={1} />
+        <StatCard value={duplicates} label="Doublons rencontrés" icon={<CopyX />} accent="amber" i={2} />
       </div>
 
-      <div>
-        <h2 style={styles.blockTitle}>Répartition par source</h2>
-        <RepartitionParSource bySource={bySource} />
-      </div>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+        <Card className="animate-rise p-6">
+          <SectionTitle icon={<Sparkles />}>Répartition par source</SectionTitle>
+          <RepartitionParSource bySource={bySource} />
+        </Card>
 
-      <div>
-        <h2 style={styles.blockTitle}>Derniers runs</h2>
-        <DerniersRuns runs={lastRuns} />
+        <Card className="animate-rise p-6">
+          <SectionTitle icon={<Search />}>Derniers runs</SectionTitle>
+          <DerniersRuns runs={lastRuns} />
+        </Card>
       </div>
     </section>
   );

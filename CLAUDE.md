@@ -135,6 +135,101 @@ fois (2e `POST /api/run` → `423`). Chaque run écrit une ligne dans la table `
 - Logos des sources : assets locaux `public/logos/{sourceName}.svg`.
 - Plus aucun secret Notion ; les seuls secrets restants sont les creds sources.
 
+### Design system & conventions UI/UX (À RESPECTER)
+
+L'UI suit une direction esthétique **« control-room » sombre, éditorial-terminal**.
+Tout nouvel écran/composant doit s'y conformer pour rester cohérent. Ne JAMAIS
+réintroduire de CSS ad hoc, de styles inline (`style={{ color: … }}`), ni de
+couleurs/tailles en dur : tout passe par Tailwind + les tokens.
+
+**Stack UI**
+
+- **Tailwind CSS v4** (plugin `@tailwindcss/vite`, zéro fichier de config). Tokens
+  et thème dans `web/styles/globals.css` (bloc `@theme`), importé une seule fois
+  dans `web/main.tsx`.
+- Primitives façon shadcn **maison** dans `web/components/ui/*`
+  (`Button`, `Card`, `Badge`, `Segmented`, `Switch`, `Input`) bâties avec
+  `class-variance-authority` (`cva`). Icônes via **`lucide-react`**.
+- Helper de classes obligatoire : `cn()` (`web/lib/utils.ts`, = `clsx` +
+  `tailwind-merge`). Alias d'import : **`@` → `web/`**.
+
+**Tokens (jamais de hex/px en dur — utiliser ces variables)**
+
+- Surfaces : `--color-base` (fond), `--color-panel`/`--color-panel-2` (cartes),
+  `--color-line`/`--color-line-strong` (bords).
+- Texte (paliers, déjà calibrés WCAG AA) : `--color-ink` > `--color-ink-soft` >
+  `--color-ink-mute` > `--color-ink-faint`. **`--color-ink-faint` est réservé aux
+  icônes décoratives et micro-texte ; ne pas l'utiliser pour du texte porteur de
+  sens** (il est le palier le plus limite).
+- Accents : `--color-signal` (lime, action principale), `--color-amber` (favoris),
+  `--color-danger` (suppression/erreur).
+- Rayons : `--radius-xs|sm|md|lg|xl`. Ombres : `--shadow-panel`, `--shadow-pop`.
+  Courbe d'anim : `--ease-out-expo`.
+- Usage en classe arbitraire : `text-[var(--color-ink-soft)]`,
+  `rounded-[var(--radius-md)]`, `border-[var(--color-line)]`.
+
+**Typographie (3 familles, rôles fixes)**
+
+- `--font-serif` (Instrument Serif) : grands titres de page + chiffres-clés.
+- `--font-sans` (Hanken Grotesk) : corps & UI (défaut).
+- `--font-mono` (Geist Mono) : **toute donnée** (scores masqués, dates, durées,
+  noms de source, compteurs, index). Classe : `font-[family-name:var(--font-mono)]`.
+
+**Composants — toujours réutiliser, ne pas refaire**
+
+```tsx
+import { Button } from "@/components/ui/button";   // variant: signal|outline|ghost|danger ; size: sm|md|lg|icon
+import { Card } from "@/components/ui/card";        // panneau standard (bord + ombre + blur)
+import { Badge } from "@/components/ui/badge";      // tone: neutral|signal|amber|mono
+import { Segmented } from "@/components/ui/segmented"; // choix exclusif (radiogroup + clavier)
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+
+<Button variant="signal"><Plus aria-hidden="true" className="size-4" /> Ajouter</Button>
+<Card className="p-6">…</Card>
+<Badge tone="mono">{formatDuree(ms)}</Badge>
+```
+
+**Patterns de page (cohérence inter-pages)**
+
+- L'en-tête éditorial (kicker mono `/route`, titre serif, accroche) est géré par
+  le **shell** (`web/App.tsx` + `web/lib/routes.tsx`). Une page rend uniquement son
+  corps dans une `<section>` ; **pas de second `<h1>`**.
+- Titre de bloc interne : `<h2>` via le helper `SectionTitle` (icône + label
+  uppercase mono). Respecter l'ordre des titres (h1 shell → h2 → h3).
+- États standard d'une page liste/données :
+  - **chargement** → skeletons (`animate-pulse`, blocs `bg-[var(--color-panel)]/40`),
+    conteneur `aria-hidden="true"` + `aria-busy` sur la section + `<span className="sr-only">Chargement…</span>`.
+  - **erreur** → encart `role="alert"` bord/texte `--color-danger`.
+  - **vide** → encart pointillé centré (icône `aria-hidden`, titre `ink-soft`, aide `ink-mute`).
+- Apparition en cascade : classe `stagger` sur le conteneur + `style={{ "--i": n } as React.CSSProperties}`
+  sur chaque enfant direct (voir keyframes dans `globals.css`).
+
+**Accessibilité — non négociable (WCAG 2.2 AA)**
+
+- **Toute icône lucide décorative porte `aria-hidden="true"`.** Un bouton-icône
+  (sans texte) porte un `aria-label` explicite (le `title` ne suffit pas).
+- On/off → `role="switch"` + `aria-checked` (PAS `aria-pressed`). Choix exclusif →
+  `Segmented` (`radiogroup`, navigation flèches déjà gérée). Groupe de réglages →
+  `role="group"` + `aria-labelledby` pointant le `<h2>` de section.
+- Liens `target="_blank"` : `rel="noopener noreferrer"` + mention SR
+  `<span className="sr-only"> (nouvel onglet)</span>`.
+- Cibles tactiles ≥ 24px (préférer `size-8`/`size-9`). Le focus visible est global
+  (`:focus-visible` dans `globals.css`) — ne pas le désactiver.
+- Messages de statut sur un nœud **stable** avec `role="status" aria-live="polite"`.
+- Respecter `prefers-reduced-motion` (déjà neutralisé globalement — ne pas
+  contourner avec des anims JS).
+
+**Règle produit : le `score` des offres N'EST PAS affiché** (ni mètre, ni tri).
+Le pipeline ne score pas (toujours 0). `score` et `OfferSort = "recent" | "score"`
+restent dans le contrat figé mais **ne sont pas surfacés dans l'UI** ; ne pas les
+ré-ajouter sans demande explicite.
+
+**Anti-patterns interdits** : styles inline pour la présentation, hex/px en dur,
+`<div>` cliquable sans rôle, nouvelle lib de composants (MUI, Chakra…), icônes non
+masquées, texte porteur en `ink-faint`, fichiers `.css` par composant (tout est
+Tailwind + tokens).
+
 ### Secrets & config
 
 - Aucun secret en clair dans le repo. Tout passe par `.env` (gitignored).

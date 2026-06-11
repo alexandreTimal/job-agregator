@@ -17,8 +17,10 @@
  * (Correctif idéal côté foundation : émettre un RunEvent `error` sur `es.onerror`.)
  */
 import { useEffect, useRef, useState } from "react";
+import { Radar, Loader2, TriangleAlert } from "lucide-react";
 import type { RunEvent } from "../../../src/shared/types";
 import { apiClient } from "../../lib/api-client";
+import { cn } from "@/lib/utils";
 
 interface RunButtonProps {
   /** Appelé quand le run se termine (succès ou erreur) pour rafraîchir la liste. */
@@ -143,36 +145,90 @@ export default function RunButton({ onRunFinished }: RunButtonProps) {
   }
 
   return (
-    <div className="run-control">
-      <button
-        type="button"
-        className="run-control__button"
-        onClick={lancer}
-        disabled={enCours}
-        aria-busy={enCours}
-      >
-        {enCours ? "Recherche en cours…" : "Lancer la recherche"}
-      </button>
+    <div className="relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)]/60 shadow-[var(--shadow-panel)]">
+      {/* Texture grille en fond du panneau de commande */}
+      <div className="bg-grid pointer-events-none absolute inset-0 opacity-[0.35]" aria-hidden />
 
-      {enCours && (
-        <div
-          className="run-control__progress"
-          role="progressbar"
-          aria-label="Progression de la recherche"
+      <div className="relative flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div className="flex items-center gap-4">
+          <div
+            className={cn(
+              "grid size-12 place-items-center rounded-[var(--radius-md)] border transition-colors",
+              enCours
+                ? "border-[var(--color-signal)]/40 bg-[var(--color-signal)]/10 text-[var(--color-signal)]"
+                : "border-[var(--color-line-strong)] bg-black/30 text-[var(--color-ink-soft)]",
+            )}
+          >
+            <Radar aria-hidden="true" className={cn("size-5", enCours && "[animation:pulse-dot_1.8s_ease-in-out_infinite]")} />
+          </div>
+          <div>
+            <p className="font-[family-name:var(--font-mono)] text-[0.68rem] uppercase tracking-[0.18em] text-[var(--color-ink-mute)]">
+              Pipeline
+            </p>
+            <p className="text-[0.98rem] font-semibold text-[var(--color-ink)]">
+              {enCours ? "Collecte en cours" : "Lancer une collecte"}
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={lancer}
+          disabled={enCours}
+          aria-busy={enCours}
+          className={cn(
+            "inline-flex h-11 items-center justify-center gap-2 rounded-[var(--radius-sm)] px-5 text-sm font-semibold " +
+              "transition-all duration-200 ease-[var(--ease-out-expo)] active:translate-y-px " +
+              "disabled:cursor-progress",
+            enCours
+              ? "border border-[var(--color-line-strong)] bg-black/30 text-[var(--color-ink-mute)]"
+              : "bg-[var(--color-signal)] text-[#0a0b0a] shadow-[0_10px_30px_-12px_var(--color-signal-glow)] hover:bg-[#d4fa60]",
+          )}
         >
-          <div className="run-control__progress-bar" />
+          {enCours ? (
+            <>
+              <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+              Recherche en cours…
+            </>
+          ) : (
+            <>
+              <Radar aria-hidden="true" className="size-4" />
+              Lancer la recherche
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Faisceau de balayage (progression indéterminée). Purement décoratif :
+          l'avancement réel est annoncé par la ligne de statut (role="status"). */}
+      {enCours && (
+        <div aria-hidden="true" className="relative h-[3px] w-full overflow-hidden bg-black/40">
+          <div className="absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-[var(--color-signal)] to-transparent [animation:scan_1.4s_linear_infinite]" />
         </div>
       )}
 
-      {message && (
-        <p className="run-control__message" role="status">
-          {message}
-        </p>
-      )}
-      {erreur && (
-        <p className="run-control__error" role="alert">
-          {erreur}
-        </p>
+      {/* Ligne de statut / erreur */}
+      {(message || erreur) && (
+        <div className="relative border-t border-[var(--color-line)] px-5 py-3 sm:px-6">
+          {message && !erreur && (
+            <p
+              className="flex items-center gap-2 font-[family-name:var(--font-mono)] text-[0.78rem] text-[var(--color-ink-soft)]"
+              role="status"
+            >
+              <span className="size-1.5 shrink-0 rounded-full bg-[var(--color-signal)] [animation:pulse-dot_1.6s_ease-in-out_infinite]" />
+              {message}
+            </p>
+          )}
+          {erreur && (
+            <p
+              className="flex items-center gap-2 text-[0.82rem] text-[var(--color-danger)]"
+              role="alert"
+            >
+              <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
+              {erreur}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
