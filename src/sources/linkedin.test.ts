@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildGuestSearchUrl, cleanJobUrl, isBlockedStatus } from "./linkedin";
+import { buildGuestSearchUrl, cleanJobUrl, classifyZeroCards } from "./linkedin";
 
 test("buildGuestSearchUrl : encode keyword + location + start", () => {
   const url = buildGuestSearchUrl("data engineer", "Paris", 0);
@@ -43,16 +43,18 @@ test("cleanJobUrl : href invalide → chaîne d'origine (best-effort)", () => {
   assert.equal(cleanJobUrl(""), "");
 });
 
-test("isBlockedStatus : 2xx → pas un blocage (recherche vide légitime)", () => {
-  assert.equal(isBlockedStatus(200), false);
-  assert.equal(isBlockedStatus(204), false);
+test("classifyZeroCards : statut non-2xx → blocked", () => {
+  assert.equal(classifyZeroCards({ status: 429, bodyTextLength: 0 }), "blocked");
+  assert.equal(classifyZeroCards({ status: 403, bodyTextLength: 5000 }), "blocked");
+  assert.equal(classifyZeroCards({ status: 999, bodyTextLength: 0 }), "blocked");
+  assert.equal(classifyZeroCards({ status: null, bodyTextLength: 0 }), "blocked");
 });
-test("isBlockedStatus : non-2xx → blocage (capture justifiée)", () => {
-  assert.equal(isBlockedStatus(429), true);
-  assert.equal(isBlockedStatus(403), true);
-  assert.equal(isBlockedStatus(999), true);
-  assert.equal(isBlockedStatus(503), true);
+test("classifyZeroCards : 2xx + body vide → empty (recherche sans résultat)", () => {
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 0 }), "empty");
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 10 }), "empty");
+  assert.equal(classifyZeroCards({ status: 204, bodyTextLength: 0 }), "empty");
 });
-test("isBlockedStatus : null (pas de réponse / navigation échouée) → blocage", () => {
-  assert.equal(isBlockedStatus(null), true);
+test("classifyZeroCards : 2xx + body plein mais 0 carte → selector (sélecteur cassé)", () => {
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 5000 }), "selector");
+  assert.equal(classifyZeroCards({ status: 200, bodyTextLength: 33 }), "selector");
 });

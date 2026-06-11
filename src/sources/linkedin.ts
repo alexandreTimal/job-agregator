@@ -45,22 +45,48 @@ export function cleanJobUrl(href: string): string {
 }
 
 /**
- * Sur 0 carte, distingue un blocage/anomalie (à capturer) d'une recherche vide
- * légitime. L'endpoint guest renvoie un body vide en HTTP 200 quand un terme n'a
- * aucun résultat (ou en fin de pagination) : ce n'est PAS une panne. Seul un
- * statut non-2xx (429/403/999…) ou l'absence de réponse trahit un vrai blocage.
+ * Seuil (longueur d'innerText trimmé) en-dessous duquel le body est jugé « vide ».
+ * La réponse 0-résultat de l'endpoint guest est un body quasi vide
+ * (`<body></body>`, innerText ≈ 0), tandis qu'une vraie page de cartes en a des
+ * milliers — 32 est donc une frontière sûre, loin des deux régimes.
+ */
+const EMPTY_BODY_MAX = 32;
+
+/**
+ * Sur 0 carte, classe la cause en 3 verdicts à partir du statut HTTP ET du volume
+ * de texte du body. Le seul statut HTTP ne suffit pas : un sélecteur cassé
+ * (LinkedIn renomme `div.base-card`) sert toujours HTTP 200 + 0 carte et serait
+ * sinon confondu avec une recherche vide → panne SILENCIEUSE. Le discriminateur
+ * fiable est le volume de texte rendu :
+ *
+ * - `"blocked"` : statut null (pas de réponse) OU hors 2xx (429/403/999…) →
+ *   rate-limit / réponse non-2xx. À capturer.
+ * - `"empty"` : 2xx + body quasi vide (< EMPTY_BODY_MAX) → recherche sans résultat
+ *   ou fin de pagination. C'est le cas normal de l'endpoint guest, PAS une panne.
+ * - `"selector"` : 2xx + body plein mais 0 carte → la page a du contenu mais aucun
+ *   nœud ne matche `CARD_SELECTOR` : sélecteur probablement cassé. À capturer.
+ *
  * Fonction pure.
  */
-export function isBlockedStatus(status: number | null): boolean {
-  if (status === null) return true;
-  return status < 200 || status >= 300;
+export function classifyZeroCards(input: {
+  status: number | null;
+  bodyTextLength: number;
+}): "blocked" | "empty" | "selector" {
+  const { status, bodyTextLength } = input;
+  if (status === null || status < 200 || status >= 300) return "blocked";
+  if (bodyTextLength < EMPTY_BODY_MAX) return "empty";
+  return "selector";
 }
 
-/** Résultat brut d'une page + diagnostic (cartes vues / ignorées) + statut HTTP. */
+/**
+ * Résultat brut d'une page + diagnostic (cartes vues / ignorées) + statut HTTP +
+ * volume de texte du body (discriminateur de `classifyZeroCards`).
+ */
 interface ScrapePageResult {
   raws: RawScrapeResult[];
   diag: PageDiag;
   status: number | null;
+  bodyTextLength: number;
 }
 
 async function scrapePage(
@@ -87,7 +113,7 @@ async function scrapePage(
   // navigateur, ce qui fait planter `page.evaluate` (`__name is not defined`) —
   // c'est pourquoi le nettoyage d'URL est ré-inliné ici plutôt que d'appeler
   // `cleanJobUrl`.
-  const { raws, cardCount, dropped } = await page.evaluate(
+  const { raws, cardCount, dropped, bodyTextLength } = await page.evaluate(
     ({ origin, cardSelector }) => {
       const results: RawScrapeResult[] = [];
       const dropped = { noTitle: 0, noHref: 0 };
@@ -141,12 +167,17 @@ async function scrapePage(
         });
       }
 
-      return { raws: results, cardCount: cards.length, dropped };
+      return {
+        raws: results,
+        cardCount: cards.length,
+        dropped,
+        bodyTextLength: (document.body?.innerText ?? "").trim().length,
+      };
     },
     { origin: ORIGIN, cardSelector: CARD_SELECTOR },
   );
 
-  return { raws, diag: { cardCount, dropped }, status };
+  return { raws, diag: { cardCount, dropped }, status, bodyTextLength };
 }
 
 export const linkedinSource: ScrapingSource = {
@@ -193,32 +224,40 @@ export const linkedinSource: ScrapingSource = {
           const url = buildGuestSearchUrl(term, location, start);
           logger.info(`Scraping page ${p}`, { term, url });
 
-          const { raws, diag, status } = await scrapePage(page, url);
+          const { raws, diag, status, bodyTextLength } = await scrapePage(page, url);
           report.addPageDiag(diag);
           logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
 
           if (diag.cardCount === 0) {
-            if (p === 1) {
-              if (isBlockedStatus(status)) {
-                // Vrai blocage (non-2xx / pas de réponse) : capture pour diagnostic.
-                const artefacts = await captureFailure(page, "linkedin", "zero-cards");
-                logger.warn("0 carte sur la page 1 — sélecteur cassé ou rate-limit LinkedIn", {
+            const verdict = classifyZeroCards({ status, bodyTextLength });
+            if (verdict === "empty") {
+              // Body vide en succès HTTP : recherche sans résultat (ou fin de pagination). Normal.
+              logger.info("Aucun résultat pour ce terme (réponse vide en succès HTTP)", {
+                term,
+                url,
+                status,
+              });
+            } else {
+              // blocked (non-2xx / pas de réponse) OU selector (page pleine, 0 carte = sélecteur cassé).
+              // Capture seulement en page 1 pour ne pas spammer data/debug à chaque page.
+              const artefacts = p === 1 ? await captureFailure(page, "linkedin", "zero-cards") : null;
+              logger.warn(
+                verdict === "blocked"
+                  ? "0 carte — blocage probable (rate-limit ou réponse non-2xx)"
+                  : "0 carte malgré une page non vide — sélecteur probablement cassé",
+                {
+                  verdict,
                   selector: CARD_SELECTOR,
                   term,
                   url,
                   status,
-                  capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
-                });
-              } else {
-                // HTTP 2xx + 0 carte = recherche sans résultat (ou fin de pagination) : normal.
-                logger.info("Aucun résultat pour ce terme (réponse vide en succès HTTP)", {
-                  term,
-                  url,
-                  status,
-                });
-              }
-            } else {
-              logger.info(`Aucune offre page ${p}, arrêt pagination`, { term });
+                  capture: artefacts
+                    ? `${artefacts}.html / .png`
+                    : p === 1
+                      ? "échec capture"
+                      : "non capturé (page>1)",
+                },
+              );
             }
             break; // boucle de pages seulement → terme suivant
           }
