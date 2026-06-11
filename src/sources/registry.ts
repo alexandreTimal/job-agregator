@@ -11,3 +11,13 @@ import { helloworkSource } from "./hellowork";
  * trivialement, même interface.
  */
 export const sources: ScrapingSource[] = [wttjSource, helloworkSource];
+
+/**
+ * Filtre le registry par les noms de sources activées (cf. `enabledSources`
+ * de la table `settings`, piloté par l'UI). L'ordre du registry est conservé.
+ * Un nom inconnu est simplement ignoré (best-effort).
+ */
+export function getEnabledSources(names: string[]): ScrapingSource[] {
+  const enabled = new Set(names);
+  return sources.filter((s) => enabled.has(s.name));
+}

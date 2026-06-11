@@ -16,10 +16,20 @@ export interface FilterVerdict {
 export function passesFilters(offer: RawJobOffer, config: SearchConfig): FilterVerdict {
   const haystack = normalizeText(`${offer.title} ${offer.company ?? ""}`);
 
+  // Les types de contrat sélectionnés (ex. "stage", "CDI") font autorité : un
+  // terme d'exclusion qui désigne un contrat explicitement choisi ne doit jamais
+  // disqualifier l'offre (sinon "stage" ne serait pas réellement sélectionnable).
+  const selectedContracts = new Set(
+    (config.contractTypes ?? []).map((c) => normalizeText(c)).filter(Boolean),
+  );
+
   // 1) Mots-clés d'exclusion (titre + entreprise)
   for (const term of config.exclude ?? []) {
     const needle = normalizeText(term);
-    if (needle && haystack.includes(needle)) {
+    if (!needle) continue;
+    // On ignore un terme d'exclusion qui coïncide avec un contrat sélectionné.
+    if (selectedContracts.has(needle)) continue;
+    if (haystack.includes(needle)) {
       return { passed: false, reason: `exclu:${term}` };
     }
   }
@@ -83,7 +93,7 @@ export function parseSalary(raw: string): number | null {
   return Math.round(best);
 }
 
-/** Score déterministe (0-100) pour trier dans Notion — pas de LLM. */
+/** Score déterministe (0-100) pour trier les offres dans l'UI — pas de LLM. */
 export function scoreOffer(
   offer: RawJobOffer,
   config: SearchConfig,

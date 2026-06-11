@@ -2,6 +2,7 @@ import type { RawJobOffer } from "../lib/types";
 import type { ScrapingSource, FetchOptions, SearchFilters } from "../lib/source-interface";
 import { launchBrowser } from "../lib/browser";
 import { createLogger } from "../lib/logger";
+import { parsePublishedAt } from "../lib/dates";
 
 const logger = createLogger("WTTJ");
 const BASE_URL = "https://www.welcometothejungle.com";
@@ -69,6 +70,7 @@ async function scrapePage(
       salary: string | null;
       contractType: string | null;
       urlSource: string;
+      publishedRaw: string | null;
     }[] = [];
 
     const cards = document.querySelectorAll('[data-role="jobs:thumb"]');
@@ -97,6 +99,16 @@ async function scrapePage(
         if (alt === "Location" && text) location = text;
       }
 
+      // Date de publication best-effort : on privilégie l'attribut
+      // `datetime` d'un éventuel <time>, sinon le texte affiché.
+      // NB : un `datetime` présent mais vide ("") est traité comme absent
+      // pour ne pas court-circuiter le repli sur le texte.
+      const timeEl = el.querySelector("time");
+      const publishedRaw =
+        (timeEl?.getAttribute("datetime")?.trim() || null) ??
+        timeEl?.textContent?.trim() ??
+        null;
+
       results.push({
         title,
         company,
@@ -104,17 +116,21 @@ async function scrapePage(
         salary: null,
         contractType,
         urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
+        publishedRaw,
       });
     }
 
     return results;
   }, BASE_URL);
 
-  return offers.map((o: typeof offers[number]) => ({
-    ...o,
-    sourceName: "wttj" as const,
-    publishedAt: null,
-  }));
+  return offers.map((o: typeof offers[number]) => {
+    const { publishedRaw, ...rest } = o;
+    return {
+      ...rest,
+      sourceName: "wttj" as const,
+      publishedAt: parsePublishedAt(publishedRaw),
+    };
+  });
 }
 
 export const wttjSource: ScrapingSource = {

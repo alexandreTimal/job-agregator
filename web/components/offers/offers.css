@@ -1,0 +1,203 @@
+/*
+ * Styles propres à la lane Offres (page + carte + bouton run).
+ *
+ * Volontairement scopés sous des préfixes dédiés (offers-page, offer-card,
+ * run-control) pour ne pas entrer en collision avec le reste de l'UI.
+ */
+
+.offers-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.offers-page__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.offers-page__toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.offers-page__state {
+  color: #555;
+  font-style: italic;
+}
+
+.offers-page__error {
+  color: #b00020;
+}
+
+.offers-page__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* --- Carte offre --- */
+
+.offer-card {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.75rem;
+  border: 1px solid #e2e2e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.offer-card--liked {
+  border-color: #f2c14e;
+  background: #fffdf5;
+}
+
+.offer-card__logo {
+  flex: 0 0 auto;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.offer-card__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.offer-card__title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+
+.offer-card__title a {
+  color: #1a4ba0;
+  text-decoration: none;
+}
+
+.offer-card__title a:hover {
+  text-decoration: underline;
+}
+
+.offer-card__meta {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.offer-card__source {
+  color: #777;
+}
+
+.offer-card__age {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.offer-card__actions {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.offer-card__actions button {
+  cursor: pointer;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #f7f7f7;
+  font-size: 0.8rem;
+}
+
+.offer-card__actions button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.offer-card__like[aria-pressed="true"] {
+  background: #f2c14e;
+  border-color: #d9a93a;
+}
+
+.offer-card__delete:hover:not(:disabled) {
+  background: #fde7e7;
+  border-color: #e0a3a3;
+}
+
+/* --- Bouton run + progression --- */
+
+.run-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.run-control__button {
+  align-self: flex-start;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: #1a4ba0;
+  color: #fff;
+  font-size: 0.95rem;
+}
+
+.run-control__button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.run-control__progress {
+  position: relative;
+  height: 6px;
+  width: 100%;
+  max-width: 320px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e2e2e2;
+}
+
+/* Barre indéterminée : la progression réelle n'est pas chiffrée par le serveur. */
+.run-control__progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: 3px;
+  background: #1a4ba0;
+  animation: run-control-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes run-control-indeterminate {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.run-control__message {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.run-control__error {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #b00020;
+}

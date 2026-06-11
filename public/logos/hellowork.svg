@@ -1,0 +1,7 @@
+<!-- Logo de la source "hellowork". Assumé maison, simple et déterministe :
+     monogramme "hw" en blanc sur le rose/magenta signature de la marque.
+     Pensé pour un rendu net à 24-32px (viewBox carré, coins arrondis). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="32" height="32" role="img" aria-label="HelloWork">
+  <rect width="64" height="64" rx="14" fill="#e6007e"/>
+  <text x="32" y="41" font-family="'Helvetica Neue', Arial, sans-serif" font-size="26" font-weight="800" letter-spacing="-1" text-anchor="middle" fill="#ffffff">hw</text>
+</svg>

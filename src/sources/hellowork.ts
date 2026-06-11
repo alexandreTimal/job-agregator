@@ -2,6 +2,7 @@ import type { RawJobOffer } from "../lib/types";
 import type { ScrapingSource, FetchOptions, SearchFilters } from "../lib/source-interface";
 import { launchBrowser } from "../lib/browser";
 import { createLogger } from "../lib/logger";
+import { parsePublishedAt } from "../lib/dates";
 
 const logger = createLogger("HELLOWORK");
 const BASE_URL = "https://www.hellowork.com";
@@ -74,6 +75,7 @@ async function scrapePage(
       salary: string | null;
       contractType: string | null;
       urlSource: string;
+      publishedRaw: string | null;
     }[] = [];
 
     const cards = document.querySelectorAll('[data-cy="serpCard"]');
@@ -104,6 +106,29 @@ async function scrapePage(
         }
       }
 
+      // Date de publication best-effort : attribut `datetime` d'un <time>
+      // si présent, sinon le texte d'un éventuel libellé de date relative.
+      // NB : un `datetime` présent mais vide ("") est traité comme absent
+      // pour ne pas court-circuiter le repli sur [data-cy=publicationDate].
+      const timeEl = el.querySelector("time");
+      let publishedRaw: string | null =
+        (timeEl?.getAttribute("datetime")?.trim() || null) ??
+        timeEl?.textContent?.trim() ??
+        el.querySelector('[data-cy="publicationDate"]')?.textContent?.trim() ??
+        null;
+
+      if (!publishedRaw) {
+        // Repli : repérer un tag du type « il y a … » / « aujourd'hui » / « hier ».
+        const dateTags = el.querySelectorAll(".tw-tag-contract-s, .tw-tag-secondary-s, time, span");
+        for (const tag of dateTags) {
+          const t = tag.textContent?.trim() ?? "";
+          if (/il y a|aujourd|hier/i.test(t)) {
+            publishedRaw = t;
+            break;
+          }
+        }
+      }
+
       results.push({
         title,
         company: company || null,
@@ -111,17 +136,21 @@ async function scrapePage(
         salary: salary || null,
         contractType: contractType || null,
         urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
+        publishedRaw,
       });
     }
 
     return results;
   }, BASE_URL);
 
-  return offers.map((o: typeof offers[number]) => ({
-    ...o,
-    sourceName: "hellowork" as const,
-    publishedAt: null,
-  }));
+  return offers.map((o: typeof offers[number]) => {
+    const { publishedRaw, ...rest } = o;
+    return {
+      ...rest,
+      sourceName: "hellowork" as const,
+      publishedAt: parsePublishedAt(publishedRaw),
+    };
+  });
 }
 
 export const helloworkSource: ScrapingSource = {
