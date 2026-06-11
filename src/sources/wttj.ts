@@ -1,10 +1,9 @@
 import type { RawJobOffer } from "../lib/types";
-import type { ScrapingSource, FetchOptions, SearchFilters } from "../lib/source-interface";
+import type { ScrapingSource, FetchOptions } from "../lib/source-interface";
 import { launchBrowser } from "../lib/browser";
 import { createLogger } from "../lib/logger";
 import { ParseReport, finalizeOffers } from "../lib/parse-report";
-import type { RawScrapeResult, PageDiag } from "../lib/parse-report";
-import { captureFailure } from "../lib/debug-capture";
+import type { RawScrapeResult } from "../lib/parse-report";
 import {
   WTTJ_UA,
   WTTJ_LOCALE,
@@ -14,160 +13,80 @@ import {
 } from "./wttj-session";
 
 const logger = createLogger("WTTJ");
-const BASE_URL = "https://www.welcometothejungle.com";
-// La recherche publique « classique » de WTTJ a été remplacée par un flux de
-// matching qui pousse vers la création de compte (`/fr/jobs?query=…` ne rend
-// plus de liste). Le paramètre `classic-search=1` sur `/fr/jobs-matches`
-// rétablit la liste de résultats consultable sans authentification.
-const SEARCH_PATH = "/fr/jobs-matches";
+const SITE_URL = "https://www.welcometothejungle.com";
+// API JSON authentifiée. Connecté, WTTJ ignore tout mot-clé d'URL et sert le
+// *feed personnalisé* de l'utilisateur (ses recherches sauvegardées) : cet
+// endpoint le renvoie proprement, paginé, sans scraping DOM ni override de
+// rendu. Il n'accepte QUE `page` / `per_page` — aucun filtre serveur. La
+// pertinence est donc pilotée côté WTTJ (recherches sauvegardées du compte), et
+// affinée ensuite par notre filtre déterministe (exclude/salaryMin/locations/
+// contractTypes).
+const API_URL = "https://api.welcometothejungle.com/api/v3/search/jobs";
+const PER_PAGE = 30;
 
-// Conteneur d'une offre : `data-testid="job-card-<n>"`. Les éléments internes
-// (tags, boutons) portent des testid `job-card-tag-…` / `job-card-…` : on filtre
-// donc sur le motif exact `job-card-<nombre>` pour ne garder que les cartes.
-const CARD_SELECTOR = '[data-testid^="job-card-"]';
+/** contract_type WTTJ (API, en anglais) → libellé FR (cohérent avec l'UI / le filtre). */
+const CONTRACT_MAP: Record<string, string> = {
+  permanent: "CDI",
+  full_time: "CDI",
+  fixed_term: "CDD",
+  temporary: "CDD",
+  internship: "Stage",
+  apprenticeship: "Alternance",
+  freelance: "Freelance",
+  vie: "VIE",
+  part_time: "Temps partiel",
+};
 
-function buildSearchUrl(page: number, filters?: SearchFilters): string {
-  const params = new URLSearchParams();
-  params.set("classic-search", "1");
-
-  if (filters?.keyword) {
-    params.set("q", filters.keyword);
-  }
-
-  // WTTJ classic-search ne prend qu'une ville. Les autres critères (contrat,
-  // remote, salaire) sont volontairement laissés au filtre déterministe en aval
-  // (`src/filter.ts`) : les anciens paramètres Algolia `refinementList[…]` ne
-  // sont plus reconnus par cette page.
-  if (filters?.locations?.length) {
-    params.set("city", filters.locations[0]!.label);
-  }
-
-  params.set("page", String(page));
-
-  return `${BASE_URL}${SEARCH_PATH}?${params.toString()}`;
+/** Forme (partielle) d'une offre telle que renvoyée par l'API v3. */
+interface ApiJob {
+  name?: string;
+  slug?: string;
+  organization?: { name?: string; slug?: string };
+  office?: { city?: string | null };
+  offices?: Array<{ city?: string | null }>;
+  contract_type?: string;
+  published_at?: string;
+  salary_min?: number | null;
+  salary_max?: number | null;
+  salary_currency?: string | null;
+  salary_period?: string | null;
 }
 
-/** Résultat brut d'une page + diagnostic (cartes vues / ignorées). */
-interface ScrapePageResult {
-  raws: RawScrapeResult[];
-  diag: PageDiag;
-  /** `true` si WTTJ a redirigé vers la page de connexion (session expirée/invalide). */
-  redirectedToAuth: boolean;
+interface ApiResponse {
+  data?: ApiJob[];
+  metadata?: { total?: number; page?: number; per_page?: number; page_count?: number };
 }
 
-async function scrapePage(
-  page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
-  url: string,
-): Promise<ScrapePageResult> {
-  // `domcontentloaded` (et non `networkidle`) : l'app WTTJ (Next.js) maintient
-  // des requêtes en fond, `networkidle` peut ne jamais être atteint et faire
-  // timeout le goto. On charge vite puis on attend explicitement les cartes,
-  // ce qui laisse le temps de rendu côté client au sélecteur ci-dessous.
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+/** Construit un libellé de salaire parsable par `parseSalary` (gère mensuel/annuel). */
+function buildSalary(j: ApiJob): string | null {
+  const { salary_min: min, salary_max: max } = j;
+  if (min == null && max == null) return null;
+  const cur = j.salary_currency ?? "EUR";
+  const amount = min != null && max != null && max !== min ? `${min} - ${max}` : `${min ?? max}`;
+  const period =
+    j.salary_period === "monthly" ? " par mois" : j.salary_period === "yearly" ? " par an" : "";
+  return `${amount} ${cur}${period}`;
+}
 
-  // Session absente/expirée → WTTJ redirige vers /fr/authenticate/signin. On le
-  // détecte tôt pour émettre un message d'auth ciblé (et NE PAS capturer la page
-  // de login comme un faux « sélecteur cassé »).
-  if (page.url().includes("/authenticate/")) {
-    return { raws: [], diag: { cardCount: 0, dropped: { noTitle: 0, noHref: 0 } }, redirectedToAuth: true };
-  }
+/** Mappe une offre API → RawScrapeResult (publishedRaw = ISO, parsé en aval). */
+function toRaw(j: ApiJob): RawScrapeResult | null {
+  const title = j.name?.trim();
+  const orgSlug = j.organization?.slug;
+  if (!title || !j.slug || !orgSlug) return null; // sans URL fiable, on ignore
 
-  const cardsAppeared = await page
-    .waitForSelector('[data-testid="job-card-1"]', { timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
+  const rawContract = j.contract_type ?? null;
+  const contractType = rawContract ? (CONTRACT_MAP[rawContract] ?? rawContract) : null;
+  const location = j.office?.city ?? j.offices?.find((o) => o.city)?.city ?? null;
 
-  if (!cardsAppeared) {
-    logger.warn("Sélecteur de cartes absent après attente", { selector: CARD_SELECTOR, url });
-  }
-
-  // Le parsing se fait DANS le contexte navigateur, au plus près du DOM, puis
-  // remonte sous forme de diagnostic structuré.
-  //
-  // NB : tout est inliné (aucune fonction nommée imbriquée). tsx/esbuild enrobe
-  // sinon les fonctions nommées d'un appel `__name(...)` absent du contexte
-  // navigateur, ce qui fait planter `page.evaluate` (`__name is not defined`).
-  const { raws, cardCount, dropped } = await page.evaluate(
-    ({ baseUrl, cardSelector }) => {
-      const results: RawScrapeResult[] = [];
-      const dropped = { noTitle: 0, noHref: 0 };
-
-      // On ne garde que les vraies cartes `job-card-<nombre>` (les tags internes
-      // partagent le préfixe `job-card-`).
-      const cards = [...document.querySelectorAll(cardSelector)].filter((c) =>
-        /^job-card-\d+$/.test(c.getAttribute("data-testid") ?? ""),
-      );
-
-      // La date est un nœud texte (« 21 mai 2026 » ou « il y a 6 heures ») niché
-      // dans un div aux classes utilitaires instables, SANS testid. Motifs assez
-      // stricts pour ne pas confondre avec « … € par mois » (salaire).
-      const reAbs =
-        /\b\d{1,2}\s+(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre|janv|févr|fevr|juil|sept|oct|nov|déc|dec)\.?\s+(?:19|20)\d{2}\b/i;
-      const reRel = /il y a\s+\d+\s*(?:heure|jour|semaine|mois|an)|aujourd|hier/i;
-
-      for (const card of cards) {
-        const el = card as HTMLElement;
-
-        // Le lien titre pointe vers une offre ; il contient le titre (texte
-        // direct) ET l'entreprise (dans un <p>). On isole le titre en retirant le
-        // <p> sur un clone.
-        const titleAnchor = el.querySelector("a[href*='/jobs/']");
-        const href = titleAnchor?.getAttribute("href");
-        if (!href) {
-          dropped.noHref++;
-          continue;
-        }
-
-        const company = titleAnchor?.querySelector("p")?.textContent?.trim() || null;
-
-        let title = "";
-        if (titleAnchor) {
-          const clone = titleAnchor.cloneNode(true) as HTMLElement;
-          clone.querySelectorAll("p").forEach((p) => p.remove());
-          title = clone.textContent?.trim() ?? "";
-        }
-        if (!title) {
-          dropped.noTitle++;
-          continue;
-        }
-
-        const contractType =
-          el.querySelector('[data-testid="job-card-tag-contract-type"]')?.textContent?.trim() ||
-          null;
-        const location =
-          el.querySelector('[data-testid="job-card-tag-location"]')?.textContent?.trim() || null;
-        const salary =
-          el.querySelector('[data-testid="job-card-tag-salary"]')?.textContent?.trim() || null;
-
-        let publishedRaw: string | null = null;
-        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-        let node: Node | null;
-        while ((node = walker.nextNode())) {
-          const t = (node.textContent ?? "").trim();
-          if (!t) continue;
-          if (reAbs.test(t) || reRel.test(t)) {
-            publishedRaw = t;
-            break;
-          }
-        }
-
-        results.push({
-          title,
-          company,
-          location,
-          salary,
-          contractType,
-          urlSource: href.startsWith("http") ? href : `${baseUrl}${href}`,
-          publishedRaw,
-        });
-      }
-
-      return { raws: results, cardCount: cards.length, dropped };
-    },
-    { baseUrl: BASE_URL, cardSelector: CARD_SELECTOR },
-  );
-
-  return { raws, diag: { cardCount, dropped }, redirectedToAuth: false };
+  return {
+    title,
+    company: j.organization?.name?.trim() || null,
+    location: location || null,
+    salary: buildSalary(j),
+    contractType,
+    urlSource: `${SITE_URL}/fr/companies/${orgSlug}/jobs/${j.slug}`,
+    publishedRaw: j.published_at ?? null,
+  };
 }
 
 export const wttjSource: ScrapingSource = {
@@ -176,21 +95,13 @@ export const wttjSource: ScrapingSource = {
   async fetch(options?: FetchOptions): Promise<RawJobOffer[]> {
     const maxPages = options?.maxPages ?? 3;
     const limit = options?.limit;
-    // Rétro-compat : si l'appelant ne passe pas `terms`, retomber sur le keyword.
-    const terms = options?.terms?.length
-      ? options.terms
-      : options?.filters?.keyword
-        ? [options.filters.keyword]
-        : [];
-    if (terms.length === 0) return [];
 
-    // WTTJ a verrouillé sa recherche par mot-clé derrière l'authentification.
-    // Sans session exportée, on ne lance même pas le navigateur : on loggue une
-    // consigne actionnable et on rend [] (best-effort, ne casse pas le run).
+    // WTTJ exige une session authentifiée (cf. wttj-session.ts). Sans elle, on
+    // n'ouvre même pas le navigateur : consigne actionnable + [] (best-effort).
     const storageState = wttjStorageStateIfPresent();
     if (!storageState) {
       logger.warn(
-        "Session WTTJ absente : la recherche par mot-clé exige une connexion. " +
+        "Session WTTJ absente : l'API exige une connexion. " +
           "Lance `npm run wttj:login` (connexion manuelle, une seule fois).",
         { attendu: WTTJ_STORAGE_PATH },
       );
@@ -198,81 +109,91 @@ export const wttjSource: ScrapingSource = {
     }
 
     const browser = await launchBrowser();
-    // Abort de l'orchestrateur (timeout/échec) : on ferme le navigateur sans
-    // attendre la résolution de la promesse de fetch (les opérations Playwright
-    // en cours lèveront → catch → []). Le `finally` ci-dessous reste : le double
-    // close Playwright est sans danger.
     options?.signal?.addEventListener("abort", () => {
       browser.close().catch(() => {});
     });
     const report = new ParseReport("wttj");
 
     try {
+      // Contexte authentifié : `context.request` réutilise les cookies de session
+      // (domaine `.welcometothejungle.com`, donc valides sur le sous-domaine API).
+      // Aucune page n'est chargée : on tape directement l'API JSON.
       const context = await browser.newContext({
         storageState,
         userAgent: WTTJ_UA,
         locale: WTTJ_LOCALE,
         viewport: { ...WTTJ_VIEWPORT },
       });
-      const page = await context.newPage();
+
+      logger.info("Feed personnalisé WTTJ (API) — les mots-clés de config ne s'appliquent pas", {
+        note: "pertinence pilotée par les recherches sauvegardées du compte",
+      });
+
       const allOffers: RawJobOffer[] = [];
       const seen = new Set<string>();
 
-      termsLoop: for (const term of terms) {
-        const filters: SearchFilters = { ...options?.filters, keyword: term };
+      for (let p = 1; p <= maxPages; p++) {
+        const res = await context.request.get(`${API_URL}?page=${p}&per_page=${PER_PAGE}`, {
+          headers: {
+            Accept: "application/json",
+            Referer: `${SITE_URL}/`,
+            Origin: SITE_URL,
+          },
+        });
 
-        for (let p = 1; p <= maxPages; p++) {
-          const url = buildSearchUrl(p, filters);
-          logger.info(`Scraping page ${p}`, { term, url });
+        if (res.status() === 401 || res.status() === 403) {
+          logger.warn(
+            "API WTTJ : 401/403 — session expirée ou invalide. " +
+              "Relance `npm run wttj:login` pour la régénérer.",
+            { storageState: WTTJ_STORAGE_PATH, status: res.status() },
+          );
+          break;
+        }
+        if (!res.ok()) {
+          logger.warn("API WTTJ : réponse inattendue", { status: res.status(), page: p });
+          break;
+        }
 
-          const { raws, diag, redirectedToAuth } = await scrapePage(page, url);
+        const body = (await res.json().catch(() => null)) as ApiResponse | null;
+        const jobs = body?.data ?? [];
+        const pageCount = body?.metadata?.page_count ?? null;
+        logger.info(`Page ${p}`, { offres: jobs.length, total: body?.metadata?.total ?? "?" });
 
-          if (redirectedToAuth) {
-            logger.warn(
-              "Redirigé vers la page de connexion : session WTTJ expirée ou invalide. " +
-                "Relance `npm run wttj:login` pour la régénérer.",
-              { storageState: WTTJ_STORAGE_PATH },
-            );
-            break termsLoop;
+        if (jobs.length === 0) {
+          if (p === 1) {
+            logger.warn("Feed WTTJ vide en page 1", {
+              hint: "as-tu des recherches sauvegardées sur WTTJ ? (le feed en dépend)",
+            });
           }
+          break;
+        }
 
-          report.addPageDiag(diag);
-          logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
+        // Map → RawScrapeResult ; les offres sans URL fiable (org/slug manquant)
+        // sont comptées comme « ignorées » dans le diagnostic.
+        const raws: RawScrapeResult[] = [];
+        let dropped = 0;
+        for (const j of jobs) {
+          const raw = toRaw(j);
+          if (raw) raws.push(raw);
+          else dropped++;
+        }
+        report.addPageDiag({ cardCount: jobs.length, dropped: { noUrl: dropped } });
 
-          if (diag.cardCount === 0) {
-            if (p === 1) {
-              const artefacts = await captureFailure(page, "wttj", "zero-cards");
-              logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
-                selector: CARD_SELECTOR,
-                term,
-                url,
-                capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
-              });
-            } else {
-              logger.info(`Aucune offre page ${p}, arrêt pagination`, { term });
-            }
-            break; // boucle de pages seulement → terme suivant
+        const pageOffers = finalizeOffers(raws, "wttj", report);
+        for (const offer of pageOffers) {
+          if (!seen.has(offer.urlSource)) {
+            seen.add(offer.urlSource);
+            allOffers.push(offer);
           }
-
-          const pageOffers = finalizeOffers(raws, "wttj", report);
-          for (const offer of pageOffers) {
-            if (!seen.has(offer.urlSource)) {
-              seen.add(offer.urlSource);
-              allOffers.push(offer);
-            }
-          }
-
-          if (limit && allOffers.length >= limit) break termsLoop;
-          if (p < maxPages) await page.waitForTimeout(1500);
         }
 
         if (limit && allOffers.length >= limit) break;
-        await page.waitForTimeout(1500); // délai poli entre deux termes
+        if (pageCount != null && p >= pageCount) break; // dernière page atteinte
       }
 
       report.log(logger);
       const result = limit ? allOffers.slice(0, limit) : allOffers;
-      logger.info(`${allOffers.length} offres uniques collectées, ${result.length} renvoyées`);
+      logger.info(`${allOffers.length} offres collectées, ${result.length} renvoyées`);
       return result;
     } catch (error) {
       logger.error("Source en échec", {
