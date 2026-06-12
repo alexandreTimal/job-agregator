@@ -20,9 +20,17 @@ import type {
 const USE_MOCK = import.meta.env.VITE_MOCK === "1";
 
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  // N'annonce `Content-Type: application/json` QUE s'il y a un corps : un POST
+  // sans corps (ex. /delete) qui déclare ce content-type est rejeté par Fastify
+  // (FST_ERR_CTP_EMPTY_JSON_BODY → HTTP 400), car il tente de parser un body
+  // vide. C'est ce qui faisait échouer le bouton poubelle.
+  const hasBody = init?.body != null;
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: {
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
+      ...(init?.headers as Record<string, string> | undefined),
+    },
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status} sur ${path}`);

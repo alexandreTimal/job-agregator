@@ -125,14 +125,24 @@ export default function Offers() {
     // Repart d'un état propre : efface un éventuel message d'erreur précédent.
     setErreur(null);
     marquerEnCours(offre.id, true);
-    // Retrait optimiste de la liste.
+    // Mémorise la position avant le retrait optimiste, pour restaurer l'offre à
+    // l'identique si la suppression échoue (sans recharger toute la liste).
+    const position = offres.findIndex((o) => o.id === offre.id);
     setOffres((prev) => prev.filter((o) => o.id !== offre.id));
     try {
       await apiClient.deleteOffer(offre.id);
     } catch (e) {
-      // Réinsère l'offre en cas d'échec, en rechargeant pour rester cohérent avec le tri serveur.
+      // Échec : on RÉINSÈRE l'offre à sa place et on LAISSE l'erreur visible.
+      // (Surtout pas de `charger()` ici : il ferait `setErreur(null)` et
+      // effacerait le message, donnant l'illusion d'une carte qui « revient
+      // toute seule » sans explication — le vrai symptôme à éviter.)
+      setOffres((prev) => {
+        if (prev.some((o) => o.id === offre.id)) return prev; // déjà réinsérée
+        const suivant = [...prev];
+        suivant.splice(position >= 0 ? position : suivant.length, 0, offre);
+        return suivant;
+      });
       setErreur(e instanceof Error ? e.message : "Échec de la suppression.");
-      void charger();
     } finally {
       marquerEnCours(offre.id, false);
     }
