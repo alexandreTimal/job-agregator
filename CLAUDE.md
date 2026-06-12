@@ -194,6 +194,26 @@ l'agrégat de toutes les sources.
 - UI **Vite/React** dans `web/` : 3 pages (Paramètres / Stats / Offres).
 - Logos des sources : assets locaux `public/logos/{sourceName}.svg`.
 - Plus aucun secret Notion ; les seuls secrets restants sont les creds sources.
+- **Client API (`web/lib/api-client.ts`) : ne JAMAIS envoyer `Content-Type:
+  application/json` sur une requête SANS corps.** Le helper `http()` ne pose cet
+  en-tête que si `init.body` est défini : Fastify rejette tout body JSON vide
+  (`FST_ERR_CTP_EMPTY_JSON_BODY` → HTTP 400). C'est ce qui cassait le bouton
+  poubelle (`POST /api/offers/:id/delete`, sans corps). Tout POST bodyless doit
+  passer par `http()` sans forcer ce header.
+
+### Lancement & autostart (service systemd `--user`)
+
+- **Servir l'UI** : `npm run serve` (= `tsx src/server/index.ts`) sert le SPA
+  **déjà buildé** dans `web/dist` sur `127.0.0.1:5627` (surchargeable par `PORT`).
+  `npm run start` (= `vite build && tsx …`) ne sert qu'au lancement manuel one-shot.
+- **Autostart** : `npm run autostart:install` écrit le service systemd `--user`
+  (`~/.config/systemd/user/job-agregator.service`), **builde le SPA une seule
+  fois**, active le linger, puis démarre le service. `ExecStart=npm run serve`
+  **ne rebuilde pas** : un rebuild dans `ExecStart` laisserait une fenêtre de
+  ~20 s sans serveur à chaque `Restart=on-failure` (requêtes navigateur qui
+  échouent). **Après tout changement de code frontend, relancer `npm run build`**
+  (ou `npm run autostart:install`) pour rafraîchir `web/dist`, sinon le service
+  sert un bundle périmé.
 
 ### Design system & conventions UI/UX (À RESPECTER)
 
