@@ -269,10 +269,14 @@ function rowToOffer(r: OfferRow): Offer {
 
 /**
  * Liste les offres pour l'UI (hors `deleted = 1`).
- * Les favoris (`liked = 1`) remontent toujours en tête, quel que soit le tri.
+ * `all` = boîte des offres non triées (ni likées ni postulées) ; `liked` =
+ * favoris ; `applied` = postulées. Dans les filtres mêlant des likées, celles-ci
+ * remontent en tête (`liked DESC`), quel que soit le tri.
  */
 export function listOffers(filter: OfferFilter, sort: OfferSort): Offer[] {
-  let where = "deleted = 0";
+  // « Toutes » = boîte des offres NON triées : ni likées, ni postulées. Liker ou
+  // postuler une offre la fait sortir de `all` pour rejoindre l'onglet dédié.
+  let where = "deleted = 0 AND liked = 0 AND applied_at IS NULL";
   if (filter === "liked") where = "deleted = 0 AND liked = 1";
   else if (filter === "applied") where = "deleted = 0 AND applied_at IS NOT NULL";
   const secondary =

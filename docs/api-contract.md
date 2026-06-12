@@ -33,12 +33,13 @@ Query params :
 
 | Param    | Valeurs                       | Défaut    | Rôle                                              |
 | -------- | ----------------------------- | --------- | ------------------------------------------------- |
-| `filter` | `all` \| `liked` \| `applied` | `all`     | `liked` = favoris ; `applied` = offres postulées. |
+| `filter` | `all` \| `liked` \| `applied` | `all`     | `all` = offres non triées (ni likées ni postulées) ; `liked` = favoris ; `applied` = offres postulées. |
 | `sort`   | `recent` \| `score`           | `recent`  | Tri ; les likées remontent en tête.               |
 
 - `recent` : tri par `publishedAt ?? firstSeenAt` décroissant.
 - `score`  : tri par `score` décroissant puis date décroissante.
-- Dans tous les cas, `liked = true` passe en tête.
+- `all` exclut les offres `liked = true` et `appliedAt != null` : liker ou postuler une offre la déplace vers l'onglet dédié.
+- `liked = true` passe en tête dans tout filtre pouvant en contenir (`liked`, et `applied` pour une offre likée + postulée) ; `all` n'en contient jamais, l'ordre y est donc sans effet.
 
 Réponse `200` : `Offer[]`.
 

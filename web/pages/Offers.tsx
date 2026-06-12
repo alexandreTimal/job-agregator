@@ -2,9 +2,10 @@
  * Page Offres.
  *
  * Liste les offres (`apiClient.getOffers(filter, sort)`), avec :
- * - un filtre Favoris (`all` | `liked`) ;
- * - sur chaque offre, les actions Liker (POST like) et Supprimer (soft-delete,
- *   retire l'offre de la liste localement) ;
+ * - un filtre (`all` | `liked` | `applied`) ; « Toutes » ne montre que les offres
+ *   NON triées (ni likées ni postulées) — liker/postuler une offre l'en retire ;
+ * - sur chaque offre, les actions Liker (POST like), Postuler et Supprimer
+ *   (soft-delete, retire l'offre de la liste localement) ;
  * - un panneau de commande (RunButton) qui déclenche le run, suit la
  *   progression via SSE et rafraîchit la liste à la fin.
  *
@@ -66,8 +67,9 @@ export default function Offers() {
     setOffres((prev) => prev.map((o) => (o.id === offre.id ? { ...o, liked: cible } : o)));
     try {
       await apiClient.likeOffer(offre.id, cible);
-      // Si on est sur le filtre « favoris » et qu'on retire un like, l'offre doit disparaître.
-      if (filtre === "liked" && !cible) {
+      // Sur « Favoris », retirer un like fait disparaître l'offre ; sur « Toutes »,
+      // liker la fait sortir de la boîte des non-triées (elle rejoint « Favoris »).
+      if ((filtre === "liked" && !cible) || (filtre === "all" && cible)) {
         setOffres((prev) => prev.filter((o) => o.id !== offre.id));
       }
     } catch (e) {
@@ -102,8 +104,9 @@ export default function Offers() {
             : o,
         ),
       );
-      // Sur le filtre « Postulées », démarquer retire l'offre de la liste.
-      if (filtre === "applied" && !cible) {
+      // Sur « Postulées », démarquer retire l'offre ; sur « Toutes », postuler la
+      // fait sortir de la boîte des non-triées (elle rejoint « Postulées »).
+      if ((filtre === "applied" && !cible) || (filtre === "all" && cible)) {
         setOffres((prev) => prev.filter((o) => o.id !== offre.id));
       }
     } catch (e) {
