@@ -267,6 +267,32 @@ test("runPipeline : intégration (routage atsBoards, dédup inter-sources, compt
     "offre dédupliquée insérée une seule fois",
   );
 
+  // --- 6) Injection du prédicat d'early-exit dédup (isKnownOffer) ---------
+  // L'orchestrateur fournit aux sources un moyen de savoir si une offre est déjà
+  // en base, sans qu'elles importent le store ni connaissent le schéma de hash.
+  assert.equal(
+    typeof webACaptured.options?.isKnownOffer,
+    "function",
+    "l'orchestrateur injecte isKnownOffer dans les sources",
+  );
+  // Le prédicat interroge la base en direct (hash = title+company, lieu/URL
+  // ignorés) : une offre désormais persistée est « connue »…
+  assert.equal(
+    webACaptured.options?.isKnownOffer?.(
+      makeOffer({ title: "Data engineer Dup", company: "DupCo", location: "Lyon", urlSource: "https://autre/url" }),
+    ),
+    true,
+    "isKnownOffer = true pour une offre présente en base (indépendant du lieu/URL)",
+  );
+  // …une offre jamais vue ne l'est pas.
+  assert.equal(
+    webACaptured.options?.isKnownOffer?.(
+      makeOffer({ title: "Jamais Vue", company: "Inconnue", urlSource: "https://z/none" }),
+    ),
+    false,
+    "isKnownOffer = false pour une offre inconnue",
+  );
+
   // --- Le dernier run reflète les compteurs (insertRun a lieu dans main(),
   //     pas dans runPipeline) : on vérifie au moins que getStats lit la base temp.
   const stats = getStats();

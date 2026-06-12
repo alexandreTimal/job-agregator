@@ -21,7 +21,7 @@ import { getEnabledSources } from "./sources/registry";
 import { computeHash, normalizeText } from "./lib/normalize";
 import { passesFilters, scoreOffer } from "./filter";
 import { classifyContractType } from "./lib/contract-type";
-import { initDb, offerExists, insertOffer, insertRun, closeDb } from "./store/sqlite";
+import { initDb, offerExists, insertOffers, insertRun, closeDb } from "./store/sqlite";
 import { getSettings } from "./settings";
 import { pLimit, withTimeout } from "./lib/concurrency";
 import { createLogger, logFilePath } from "./lib/logger";
@@ -30,8 +30,13 @@ import type { ScoredOffer } from "./lib/types";
 
 const logger = createLogger("ORCHESTRATOR");
 
-/** Sources en parallèle (web = un seul navigateur/source, hôte jamais frappé 2× à la fois). */
-const SOURCE_CONCURRENCY = 4;
+/**
+ * Sources en parallèle (web = un seul navigateur/source, hôte jamais frappé 2× à
+ * la fois). Chaque source vise un HÔTE DIFFÉRENT (linkedin.com, hellowork.fr…) :
+ * monter ce plafond n'augmente la pression sur aucun hôte — c'est juste plus de
+ * sources lancées d'emblée. 6 couvre les 4 sources web + 2 ATS sans file d'attente.
+ */
+const SOURCE_CONCURRENCY = 6;
 /**
  * Une source traite TOUS ses termes ET toutes les villes (boucle villes × termes
  * en interne, cf. `locationSlots`). Le temps d'une source web croît donc avec le
@@ -141,6 +146,12 @@ export async function runPipeline(
         boards,
         maxPages: config.maxPagesPerSource ?? 3,
         signal: controller.signal,
+        // Early-exit dédup : une source triée par date arrête sa pagination dès
+        // qu'une page n'apporte aucune offre nouvelle. Le prédicat reflète la base
+        // (runs précédents) au moment de l'appel ; la source reste ignorante du
+        // store et du hash. `maxPages` reste le plafond de sécurité (couverture
+        // jamais réduite vs aujourd'hui ; les runs récurrents s'arrêtent juste plus tôt).
+        isKnownOffer: (offer) => offerExists(computeHash(offer)),
         // Progression intra-source : relayée telle quelle vers l'UI. Permet
         // de bouger pendant qu'une source web boucle ses termes en silence.
         // `...info` d'abord : `phase`/`source` autoritatifs ne peuvent être écrasés.
@@ -184,6 +195,11 @@ export async function runPipeline(
 
   const offersBySource = await Promise.all(tasks);
 
+  // Offres retenues à persister : collectées dans la boucle puis insérées en UNE
+  // transaction (cf. insertOffers). La dédup intra-run passe par `candidates`
+  // (Map), donc différer l'insertion ne perturbe pas la détection des doublons.
+  const toInsert: Parameters<typeof insertOffers>[0] = [];
+
   for (const offers of offersBySource) {
     found += offers.length;
     for (const offer of offers) {
@@ -204,7 +220,7 @@ export async function runPipeline(
 
       if (dryRun) continue;
 
-      insertOffer({
+      toInsert.push({
         hash,
         title: offer.title,
         company: offer.company,
@@ -217,6 +233,8 @@ export async function runPipeline(
       });
     }
   }
+
+  if (!dryRun) insertOffers(toInsert);
 
   return { found, newCount, duplicates, perSource, retained: candidates.size };
 }

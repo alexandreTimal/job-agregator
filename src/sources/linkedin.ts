@@ -70,6 +70,10 @@ export function buildGuestSearchUrl(
   // Contrainte serveur sur le type de contrat (I=stage, F=CDI…). Plusieurs
   // valeurs = liste séparée par des virgules. Absent ⇒ tous types.
   if (jobTypes.length) params.set("f_JT", jobTypes.join(","));
+  // Tri par date décroissante (DD) : les offres les plus récentes d'abord. Aligne
+  // la source sur l'intention « le frais d'abord » ET rend l'early-exit dédup sûr
+  // (une page sans nouveauté garantit que les suivantes, plus anciennes, le sont).
+  params.set("sortBy", "DD");
   params.set("start", String(start));
   return `${ORIGIN}${GUEST_SEARCH_PATH}?${params.toString()}`;
 }
@@ -334,10 +338,12 @@ export const linkedinSource: ScrapingSource = {
             }
 
             const pageOffers = finalizeOffers(raws, "linkedin", report);
+            let fresh = 0;
             for (const offer of pageOffers) {
               if (!seen.has(offer.urlSource)) {
                 seen.add(offer.urlSource);
                 allOffers.push(offer);
+                if (!options?.isKnownOffer?.(offer)) fresh++;
               }
             }
 
@@ -346,6 +352,16 @@ export const linkedinSource: ScrapingSource = {
             start += diag.cardCount;
 
             if (limit && allOffers.length >= limit) break searchLoop;
+
+            // Early-exit dédup : recherche triée par date (sortBy=DD). Page sans
+            // aucune offre nouvelle ⇒ les suivantes (plus anciennes) le seront aussi :
+            // arrêt de la pagination de ce (lieu, terme), sans rater d'offre. Inactif
+            // si `isKnownOffer` non injecté (rétro-compat/tests).
+            if (options?.isKnownOffer && pageOffers.length > 0 && fresh === 0) {
+              logger.info("Page sans nouveauté — arrêt anticipé de la pagination", { term, lieu, page: p });
+              break;
+            }
+
             if (p < maxPages) await page.waitForTimeout(1500);
           }
 

@@ -205,6 +205,37 @@ export function insertOffer(offer: {
     );
 }
 
+/**
+ * Insère un LOT d'offres en une seule transaction (vs N INSERT autocommit). En
+ * mode WAL, chaque INSERT autocommit déclenche un fsync ; grouper réduit ça à un
+ * seul fsync pour tout le lot. `INSERT OR IGNORE` reste idempotent sur le hash
+ * (la dédup est déjà tranchée en amont). Lot vide ⇒ no-op.
+ */
+export function insertOffers(offers: Array<Parameters<typeof insertOffer>[0]>): void {
+  if (offers.length === 0) return;
+  const db = getDb();
+  const stmt = db.prepare(
+    `INSERT OR IGNORE INTO seen_offers (hash, title, company, location, url, source, score, published_at, contract_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertAll = db.transaction((rows: Array<Parameters<typeof insertOffer>[0]>) => {
+    for (const o of rows) {
+      stmt.run(
+        o.hash,
+        o.title,
+        o.company,
+        o.location ?? null,
+        o.url,
+        o.source,
+        o.score,
+        o.publishedAt ?? null,
+        o.contractType ?? null,
+      );
+    }
+  });
+  insertAll(offers);
+}
+
 /** @deprecated `notified_notion` est obsolète (Notion supprimé). Conservé pour compat. */
 export function markNotifiedNotion(hash: string): void {
   getDb().prepare(`UPDATE seen_offers SET notified_notion = 1 WHERE hash = ?`).run(hash);

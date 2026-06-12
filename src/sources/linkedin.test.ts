@@ -21,6 +21,10 @@ test("buildGuestSearchUrl : start incrémenté présent dans l'URL", () => {
   assert.equal(new URL(url).searchParams.get("start"), "25");
 });
 
+test("buildGuestSearchUrl : tri par date (sortBy=DD) — frais d'abord + early-exit dédup sûr", () => {
+  assert.equal(new URL(buildGuestSearchUrl("data engineer", "Paris", 0)).searchParams.get("sortBy"), "DD");
+});
+
 test("buildGuestSearchUrl : location vide → paramètre location omis", () => {
   const url = buildGuestSearchUrl("data engineer", "", 0);
   assert.equal(new URL(url).searchParams.has("location"), false);

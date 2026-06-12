@@ -320,14 +320,27 @@ export const helloworkSource: ScrapingSource = {
             }
 
             const pageOffers = finalizeOffers(raws, "hellowork", report);
+            let fresh = 0;
             for (const offer of pageOffers) {
               if (!seen.has(offer.urlSource)) {
                 seen.add(offer.urlSource);
                 allOffers.push(offer);
+                if (!options?.isKnownOffer?.(offer)) fresh++;
               }
             }
 
             if (limit && allOffers.length >= limit) break searchLoop;
+
+            // Early-exit dédup : le SERP est trié par date (st=date). Si cette page
+            // n'apporte AUCUNE offre nouvelle (toutes déjà en base ou déjà vues ce
+            // run), les pages suivantes — plus anciennes — le seront aussi : on
+            // arrête la pagination de ce (lieu, terme) sans rater d'offre. Inactif
+            // si l'orchestrateur n'injecte pas `isKnownOffer` (rétro-compat/tests).
+            if (options?.isKnownOffer && pageOffers.length > 0 && fresh === 0) {
+              logger.info("Page sans nouveauté — arrêt anticipé de la pagination", { term, lieu, page: p });
+              break;
+            }
+
             if (p < maxPages) await page.waitForTimeout(1500);
           }
 
