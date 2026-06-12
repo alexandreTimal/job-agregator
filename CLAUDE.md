@@ -87,15 +87,19 @@ fois (2e `POST /api/run` → `423`). Chaque run écrit une ligne dans la table `
 Le cœur du pipeline est **`runPipeline()`** (exporté par `src/index.ts`, donc
 testable hors process ; `main()` ne s'exécute qu'en entrée CLI/spawn grâce à un garde
 `isEntry`). Chaque source active = **une seule tâche** lancée via
-`pLimit(SOURCE_CONCURRENCY = 4)` + un timeout par source (`withTimeout`, 240 s ;
-helpers dans `src/lib/concurrency.ts`). Une source reçoit **tous** les `terms` d'un
+`pLimit(SOURCE_CONCURRENCY = 4)` + un timeout par source (`withTimeout`, 600 s par
+défaut, surchargeable via `JOB_AGREGATOR_SOURCE_TIMEOUT_MS` ; helpers dans
+`src/lib/concurrency.ts`). Une source reçoit **tous** les `terms` d'un
 coup : les sources web bouclent leurs termes **en interne** en réutilisant un seul
 navigateur — ainsi un même hôte n'est **jamais** frappé en parallèle (sûr anti-bot).
 Au timeout/erreur, l'orchestrateur `abort()` la source via `FetchOptions.signal` (les
-sources web ferment alors leur navigateur, sans attendre la fin de la promesse
-abandonnée). Best-effort strict conservé : une source qui échoue rend `[]`, le run va
-toujours jusqu'à `done`. La dédup/filtre/score s'applique ensuite sur l'agrégat de
-toutes les sources.
+sources web ferment alors leur navigateur). Il **ré-attend ensuite la promesse de
+`fetch`** (bornée par `ABORT_GRACE_MS = 15 s`) pour **récupérer la collecte partielle**
+que la source restitue dans son `catch` : sans ça, `withTimeout` ayant déjà rejeté,
+cette moisson tardive serait silencieusement jetée (un run tronqué = 0 offre).
+Best-effort strict conservé : une source qui échoue/expire sans rien collecter rend
+`[]`, le run va toujours jusqu'à `done`. La dédup/filtre/score s'applique ensuite sur
+l'agrégat de toutes les sources.
 
 ## Règles de contribution
 

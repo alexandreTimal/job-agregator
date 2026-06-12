@@ -38,9 +38,17 @@ const SOURCE_CONCURRENCY = 4;
  * nombre de villes : 2 villes × 19 termes dépassait l'ancien plafond de 240 s, et
  * la source était abandonnée (→ 0 offre). 600 s couvre plusieurs villes. NB : à
  * l'abort, les sources restituent désormais leur collecte partielle (filet de
- * sécurité si ce budget est encore dépassé).
+ * sécurité si ce budget est encore dépassé) — cf. la récupération dans la boucle
+ * de tâches. Surchargeable via `JOB_AGREGATOR_SOURCE_TIMEOUT_MS` (tests/ops).
  */
-const SOURCE_TIMEOUT_MS = 600_000;
+const SOURCE_TIMEOUT_MS = Number(process.env.JOB_AGREGATOR_SOURCE_TIMEOUT_MS) || 600_000;
+/**
+ * Délai de grâce, APRÈS l'abort d'une source en timeout/échec, pour qu'elle
+ * restitue sa collecte partielle (son `catch` ferme le navigateur puis renvoie
+ * `allOffers`). Borné : une source qui ignorerait `signal` ne doit pas re-bloquer
+ * le run. Largement suffisant pour un `browser.close()` (observé ~7 ms en prod).
+ */
+const ABORT_GRACE_MS = 15_000;
 
 /** Émet un événement de progression sur stdout, relayé en SSE par le serveur. */
 function emit(event: RunEvent): void {
@@ -123,32 +131,40 @@ export async function runPipeline(
       // Démarrage de la source : visible dès qu'un slot pLimit se libère.
       emitEvent({ type: "progress", phase: "source-start", source: source.name });
       let offers: Awaited<ReturnType<typeof source.fetch>> = [];
+      // Référence conservée hors du `withTimeout` : au timeout on `abort()` la
+      // source, qui restitue alors sa collecte partielle via SON `catch` (la
+      // promesse RÉSOUT, elle ne rejette pas). Sans cette référence, `withTimeout`
+      // ignore cette valeur tardive (il a déjà rejeté) → la collecte est perdue.
+      const fetchPromise = source.fetch({
+        terms: settings.terms,
+        filters: baseFilters,
+        boards,
+        maxPages: config.maxPagesPerSource ?? 3,
+        signal: controller.signal,
+        // Progression intra-source : relayée telle quelle vers l'UI. Permet
+        // de bouger pendant qu'une source web boucle ses termes en silence.
+        // `...info` d'abord : `phase`/`source` autoritatifs ne peuvent être écrasés.
+        onProgress: (info) =>
+          emitEvent({ type: "progress", ...info, phase: "source-progress", source: source.name }),
+      });
       try {
-        offers = await withTimeout(
-          source.fetch({
-            terms: settings.terms,
-            filters: baseFilters,
-            boards,
-            maxPages: config.maxPagesPerSource ?? 3,
-            signal: controller.signal,
-            // Progression intra-source : relayée telle quelle vers l'UI. Permet
-            // de bouger pendant qu'une source web boucle ses termes en silence.
-            // `...info` d'abord : `phase`/`source` autoritatifs ne peuvent être écrasés.
-            onProgress: (info) =>
-              emitEvent({ type: "progress", ...info, phase: "source-progress", source: source.name }),
-          }),
-          SOURCE_TIMEOUT_MS,
-        );
+        offers = await withTimeout(fetchPromise, SOURCE_TIMEOUT_MS);
       } catch (err) {
         // Timeout/erreur : on signale la source abandonnée pour qu'elle ferme son
         // navigateur (sinon il resterait ouvert jusqu'à la résolution de sa propre
         // promesse — fuite de ressource + slot pLimit occupé). Best-effort.
         controller.abort();
+        // RÉCUPÉRATION de la collecte partielle : après abort, la source ferme son
+        // navigateur et son `catch` renvoie les offres déjà collectées. On ré-attend
+        // donc la promesse (bornée par un délai de grâce : une source qui ignore
+        // `signal` ou rejette retombe sur []). C'est ce qui rend réel le « filet de
+        // sécurité » documenté — sans ça, un run tronqué jetait toute sa moisson.
+        offers = await withTimeout(fetchPromise, ABORT_GRACE_MS).catch(() => []);
         logger.warn("Source ignorée (échec ou timeout)", {
           source: source.name,
           error: err instanceof Error ? err.message : String(err),
+          recuperees: offers.length,
         });
-        offers = [];
       }
       perSource[source.name] = offers.length;
       // Fin de source : fait avancer le compteur global (même en échec :

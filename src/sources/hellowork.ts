@@ -11,6 +11,23 @@ const logger = createLogger("HELLOWORK");
 const BASE_URL = "https://www.hellowork.com";
 const SEARCH_PATH = "/fr-fr/emploi/recherche.html";
 const CARD_SELECTOR = '[data-cy="serpCard"]';
+// Compteur de résultats du SERP (« Afficher 0 offre » / « Afficher 1 234 offres »).
+// TOUJOURS rendu (SSR Turbo), y compris à 0 résultat, et bien avant les cartes :
+// on l'utilise comme signal « SERP prêt » pour ne PAS attendre 15 s à vide, et
+// comme source de vérité pour distinguer « 0 résultat » (normal) d'un sélecteur cassé.
+const RESULT_COUNT_SELECTOR = '[data-cy="offerNumberButton"]';
+
+/**
+ * Extrait le nombre de résultats du libellé du compteur HelloWork. Pure & testable.
+ * Gère le séparateur de milliers français (espace/insécable) : « Afficher 1 234
+ * offres » → 1234, « Afficher 0 offre » → 0. Renvoie null si illisible/absent.
+ */
+export function parseHelloworkResultCount(raw: string | null | undefined): number | null {
+  if (!raw) return null;
+  const compact = raw.replace(/\s/g, ""); // \s couvre l'espace insécable U+00A0 en JS
+  const m = compact.match(/(\d+)offres?/i);
+  return m ? Number(m[1]) : null;
+}
 
 const CONTRACT_MAP: Record<string, string> = {
   cdi: "CDI",
@@ -58,6 +75,12 @@ function buildSearchUrl(page: number, filters?: SearchFilters): string {
 interface ScrapePageResult {
   raws: RawScrapeResult[];
   diag: PageDiag;
+  /**
+   * Nombre de résultats annoncé par le SERP (compteur `offerNumberButton`), ou
+   * null si le compteur est illisible. Permet de distinguer une page vide
+   * légitime (0) d'un sélecteur de cartes cassé (>0 mais 0 carte lue).
+   */
+  resultCount: number | null;
 }
 
 async function scrapePage(
@@ -81,17 +104,25 @@ async function scrapePage(
     await page.waitForTimeout(500);
   }
 
-  const cardsAppeared = await page
-    .waitForSelector(CARD_SELECTOR, { timeout: 15_000 })
-    .then(() => true)
-    .catch(() => false);
+  // SERP prêt = SOIT une carte (résultats), SOIT le compteur (toujours rendu, même
+  // à 0 résultat). On course les deux : sur une page VIDE, le compteur arrive vite
+  // et on n'attend plus 15 s en pure perte (cause du timeout 600 s sur les pages
+  // mortes / termes sans résultat). Le diagnostic « page vide vs sélecteur cassé »
+  // est tranché en aval à partir de `resultCount`.
+  // `state: "attached"` (et non le défaut "visible") : le compteur est rendu dans
+  // le DOM dès le SSR mais peut être NON VISIBLE sur une page vide (conteneur
+  // masqué). On veut juste sa PRÉSENCE pour savoir que le SERP a répondu ; attendre
+  // la visibilité ferait expirer les 15 s — précisément la lenteur qu'on supprime.
+  await page
+    .waitForSelector(`${CARD_SELECTOR}, ${RESULT_COUNT_SELECTOR}`, { state: "attached", timeout: 15_000 })
+    .catch(() => {
+      // Ni carte ni compteur : page anormale (interstitiel, blocage…). Le check
+      // `cardCount === 0` en aval lèvera le WARN + capture.
+      logger.warn("Ni carte ni compteur après attente", { url });
+    });
 
-  if (!cardsAppeared) {
-    logger.warn("Sélecteur de cartes absent après attente", { selector: CARD_SELECTOR, url });
-  }
-
-  const { raws, cardCount, dropped, companyUnavailable } = await page.evaluate(
-    ({ baseUrl, cardSelector }) => {
+  const { raws, cardCount, dropped, companyUnavailable, countRaw } = await page.evaluate(
+    ({ baseUrl, cardSelector, countSelector }) => {
       const results: RawScrapeResult[] = [];
       const dropped = { noTitle: 0, noHref: 0 };
       let companyUnavailable = 0;
@@ -188,12 +219,18 @@ async function scrapePage(
         });
       }
 
-      return { raws: results, cardCount: cards.length, dropped, companyUnavailable };
+      // Texte brut du compteur de résultats (parsé côté Node par
+      // parseHelloworkResultCount, fonction pure testable).
+      const countRaw = document.querySelector(countSelector)?.textContent?.trim() ?? null;
+
+      return { raws: results, cardCount: cards.length, dropped, companyUnavailable, countRaw };
     },
-    { baseUrl: BASE_URL, cardSelector: CARD_SELECTOR },
+    { baseUrl: BASE_URL, cardSelector: CARD_SELECTOR, countSelector: RESULT_COUNT_SELECTOR },
   );
 
-  return { raws, diag: { cardCount, dropped, companyUnavailable } };
+  const resultCount = parseHelloworkResultCount(countRaw);
+
+  return { raws, diag: { cardCount, dropped, companyUnavailable }, resultCount };
 }
 
 export const helloworkSource: ScrapingSource = {
@@ -252,23 +289,32 @@ export const helloworkSource: ScrapingSource = {
             const url = buildSearchUrl(p, filters);
             logger.info(`Scraping page ${p}`, { term, lieu, url });
 
-            const { raws, diag } = await scrapePage(page, url);
+            const { raws, diag, resultCount } = await scrapePage(page, url);
             report.addPageDiag(diag);
-            logger.debug(`Page ${p} lue`, { term, lieu, cartes: diag.cardCount, ignorees: diag.dropped });
+            logger.debug(`Page ${p} lue`, {
+              term, lieu, cartes: diag.cardCount, ignorees: diag.dropped, resultCount,
+            });
 
             if (diag.cardCount === 0) {
-              // 0 carte sur la 1re page = anomalie forte : on fige la page pour debug.
-              if (p === 1) {
+              // 0 carte. Le compteur `offerNumberButton` est le TOTAL de la
+              // recherche (pas le nb de cette page) : il reste non nul sur une page
+              // au-delà de la dernière. Seul cas réellement suspect = PAGE 1 avec
+              // des résultats annoncés (compteur ≠ 0, ou illisible) mais 0 carte
+              // lue ⇒ sélecteur racine cassé / page anormale : WARN + capture.
+              if (p === 1 && resultCount !== 0) {
                 const artefacts = await captureFailure(page, "hellowork", "zero-cards");
-                logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
+                logger.warn("0 carte en page 1 malgré des résultats — sélecteur racine probablement cassé", {
                   selector: CARD_SELECTOR,
+                  resultCount,
                   term,
                   lieu,
                   url,
                   capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
                 });
               } else {
-                logger.info(`Aucune offre page ${p}, arrêt pagination`, { term, lieu });
+                // resultCount === 0 (recherche sans résultat) OU page > 1 (fin de
+                // pagination normale). Aucune anomalie : simple INFO.
+                logger.info(`Aucune offre, arrêt pagination`, { term, lieu, page: p, resultCount });
               }
               break; // boucle de pages seulement → (lieu, terme) suivant
             }
