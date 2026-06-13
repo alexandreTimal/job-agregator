@@ -8,6 +8,8 @@
  * les pages avant que le backend Fastify n'existe.
  */
 import type {
+  CandidatureEvent,
+  CandidatureState,
   Offer,
   OfferFilter,
   OfferSort,
@@ -258,6 +260,68 @@ export const apiClient = {
         onEvent({ type: "error", message: "connexion au flux de progression interrompue" });
       }
       es.close();
+    };
+    return () => es.close();
+  },
+
+  /* ---------------------------------------------------------------- */
+  /* Candidature par offre (CV adapté + lettre, générés localement)    */
+  /* ---------------------------------------------------------------- */
+
+  /** État courant de la candidature d'une offre. */
+  async getCandidature(id: number): Promise<CandidatureState> {
+    if (USE_MOCK) {
+      return Promise.resolve({
+        offerId: id, status: "none", cvReady: false, lettreReady: false, generatedAt: null, error: null,
+      });
+    }
+    return http<CandidatureState>(`/api/offers/${id}/candidature`);
+  },
+
+  /**
+   * Lance (ou relance) la génération de la candidature d'une offre. `instruction`
+   * optionnelle = consigne libre pour une relance orientée. Renvoie l'état initial
+   * (queued/generating). La suite est suivie via `streamCandidatures`.
+   */
+  async generateCandidature(id: number, instruction?: string): Promise<CandidatureState> {
+    if (USE_MOCK) {
+      return Promise.resolve({
+        offerId: id, status: "queued", cvReady: false, lettreReady: false, generatedAt: null, error: null,
+      });
+    }
+    const res = await http<{ ok: true; state: CandidatureState }>(`/api/offers/${id}/candidature`, {
+      method: "POST",
+      // Corps SEULEMENT s'il y a une instruction (cf. http() : pas de Content-Type
+      // sur requête sans corps, sinon Fastify rejette le body vide).
+      body: instruction ? JSON.stringify({ instruction }) : undefined,
+    });
+    return res.state;
+  },
+
+  /** URL de service du PDF du CV (à ouvrir dans un onglet). */
+  candidatureCvUrl(id: number): string {
+    return `/api/offers/${id}/candidature/cv`;
+  },
+
+  /** URL de service de la lettre de motivation. */
+  candidatureLettreUrl(id: number): string {
+    return `/api/offers/${id}/candidature/lettre`;
+  },
+
+  /**
+   * Ouvre le flux SSE des changements d'état de TOUTES les candidatures. Renvoie
+   * une fonction de fermeture. Le flux ne se ferme pas côté serveur (heartbeat) :
+   * on laisse EventSource gérer ses reconnexions automatiques.
+   */
+  streamCandidatures(onEvent: (event: CandidatureEvent) => void): () => void {
+    if (USE_MOCK) return () => {};
+    const es = new EventSource(`/api/candidatures/stream`);
+    es.onmessage = (msg) => {
+      try {
+        onEvent(JSON.parse(msg.data) as CandidatureEvent);
+      } catch {
+        /* ignore les messages non JSON (commentaires/heartbeat) */
+      }
     };
     return () => es.close();
   },

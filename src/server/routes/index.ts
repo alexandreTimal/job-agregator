@@ -20,6 +20,7 @@ import { registerOffersRoutes } from "./offers";
 import { registerSettingsRoutes } from "./settings";
 import { registerStatsRoutes } from "./stats";
 import { registerRunRoutes } from "./run";
+import { registerCandidatureRoutes } from "./candidature";
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   // Sonde de santé (utile au dev / aux tests de fumée).
@@ -29,4 +30,5 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await registerSettingsRoutes(app);
   await registerStatsRoutes(app);
   await registerRunRoutes(app);
+  await registerCandidatureRoutes(app);
 }

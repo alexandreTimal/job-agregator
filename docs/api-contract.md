@@ -13,7 +13,9 @@ synchronisée ici ET dans `src/shared/types.ts`.
 
 Voir `src/shared/types.ts` pour les définitions canoniques :
 `Offer`, `OfferFilter` (`"all" | "liked" | "applied"`), `OfferSort` (`"recent" | "score"`),
-`Settings`, `SourceCount`, `Run`, `Stats`, `RunEvent`.
+`Settings`, `SourceCount`, `Run`, `Stats`, `RunEvent`,
+`CandidatureStatus` (`"none" | "queued" | "generating" | "ready" | "failed"`),
+`CandidatureState`, `CandidatureEvent`.
 
 `Offer` porte deux champs liés au suivi de candidature :
 
@@ -242,3 +244,75 @@ data: {"type":"done","message":"run terminé","newOffers":6}
 - `type: "error"`    : run échoué (`message` renseigné).
 
 Le flux se ferme après l'événement `done` ou `error`.
+
+## Candidature par offre (CV adapté + lettre)
+
+Génère, pour une offre, un **CV adapté (PDF)** + une **lettre de motivation**, via
+un agent `claude` lancé EN LOCAL sur l'abonnement de l'utilisateur (mode headless,
+**aucune clé API**). Modèle « brouillon auto, revue dans l'UI » : l'agent décide
+seul (dosage IA selon le poste, boucle de fit, garde-fous d'honnêteté) ; on ouvre
+les fichiers et on relance si besoin. **Une candidature par offre, indépendantes :
+plusieurs peuvent générer en parallèle** (plafond de concurrence + file, pas de
+verrou global — contrairement au run). Artefacts dans `data/candidatures/<id>/`.
+
+### POST /api/offers/:id/candidature
+
+Lance (ou relance) la génération de la candidature d'une offre.
+
+- Param de chemin `:id` : identifiant numérique de l'offre.
+- Corps (optionnel) : `{ "instruction"?: string }` — consigne libre transmise à
+  l'agent pour une relance orientée (ex. « insiste plus sur le commercial »).
+- Idempotent tant qu'une génération est `queued`/`generating` pour cette offre
+  (renvoie l'état courant sans relancer). Sur `none`/`ready`/`failed`, (re)lance.
+- Réponse `202` : `{ "ok": true, "state": CandidatureState }`.
+- `400` si l'`id` est invalide ; `404` si l'`id` est inconnu.
+
+### GET /api/offers/:id/candidature
+
+État courant de la candidature d'une offre.
+
+- Réponse `200` : `CandidatureState`
+
+```json
+{
+  "offerId": 220,
+  "status": "ready",
+  "cvReady": true,
+  "lettreReady": true,
+  "generatedAt": "2026-06-13T11:18:16.772Z",
+  "error": null
+}
+```
+
+- `status` : `none` (rien demandé) · `queued` (en file) · `generating` (agent en
+  cours) · `ready` (CV + lettre disponibles) · `failed` (voir `error`).
+- `cvReady` / `lettreReady` : présence des fichiers sur disque.
+- Après redémarrage serveur, l'état live est perdu : il est redéduit du disque
+  (`ready` si les deux fichiers existent, sinon `meta.json` pour `failed`).
+
+### GET /api/offers/:id/candidature/cv
+
+Sert le PDF du CV en `application/pdf` (en-tête `Content-Disposition: inline`, pour
+ouverture dans un onglet). `404` si le CV n'est pas encore généré.
+
+### GET /api/offers/:id/candidature/lettre
+
+Sert la lettre en `text/markdown; charset=utf-8` (inline). `404` si absente.
+
+### GET /api/candidatures/stream (SSE)
+
+Flux Server-Sent Events des changements d'état de **toutes** les candidatures.
+Chaque message `data:` est un `CandidatureEvent` (un `CandidatureState` + un champ
+optionnel `phase`, libellé d'avancement humain). Au branchement, un **instantané**
+de l'état de chaque candidature active est envoyé, puis les événements live.
+
+```
+data: {"offerId":220,"status":"queued","cvReady":false,"lettreReady":false,"generatedAt":null,"error":null}
+
+data: {"offerId":220,"status":"generating","cvReady":false,"lettreReady":false,"generatedAt":null,"error":null,"phase":"génération en cours (cv-tailoring → rendu → lettre)"}
+
+data: {"offerId":220,"status":"ready","cvReady":true,"lettreReady":true,"generatedAt":"2026-06-13T11:18:16.772Z","error":null}
+```
+
+Contrairement au flux de run, ce flux **ne se ferme pas** sur un terminal global
+(les candidatures sont indépendantes et continues) : il reste ouvert avec heartbeat.

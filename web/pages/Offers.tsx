@@ -17,6 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Inbox, Star, Send, Layers } from "lucide-react";
 import type { Offer, OfferFilter } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
+import { useCandidatures } from "../lib/useCandidatures";
 import OfferCard from "../components/offers/OfferCard";
 import RunButton from "../components/offers/RunButton";
 import { Segmented } from "@/components/ui/segmented";
@@ -31,6 +32,8 @@ export default function Offers() {
   const [erreur, setErreur] = useState<string | null>(null);
   /** Ids des offres dont une action (like/delete) est en cours, pour désactiver leurs boutons. */
   const [actionsEnCours, setActionsEnCours] = useState<Set<number>>(new Set());
+  /** Candidatures (CV + lettre) par offre : flux SSE + actions de génération. */
+  const { states: candidatures, ensure: chargerCandidature, generate: genererCandidature } = useCandidatures();
 
   const charger = useCallback(async () => {
     setEtat("loading");
@@ -256,6 +259,9 @@ export default function Offers() {
                   onToggleLike={basculerFavori}
                   onToggleApplied={basculerPostule}
                   onDelete={supprimer}
+                  candidature={candidatures[offre.id]}
+                  onOpenCandidature={(o) => chargerCandidature(o.id)}
+                  onGenerateCandidature={(o, instruction) => genererCandidature(o.id, instruction)}
                 />
               </li>
             ))}

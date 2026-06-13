@@ -151,3 +151,46 @@ export interface RunEvent {
   totalTerms?: number;
   message?: string;
 }
+
+/**
+ * Statut de la génération de candidature d'une offre (CV adapté + lettre),
+ * produite localement par un agent `claude` (abonnement, sans clé API).
+ *
+ * - `none`       : rien n'a été demandé pour cette offre.
+ * - `queued`     : demandée, en attente d'un créneau (plafond de concurrence atteint).
+ * - `generating` : l'agent tourne (cv-tailoring + boucle de fit + cv-render + lettre).
+ * - `ready`      : CV et lettre disponibles sur disque.
+ * - `failed`     : la génération a échoué (voir `error`).
+ *
+ * Chaque offre a sa propre candidature, INDÉPENDANTE des autres : plusieurs
+ * peuvent être `generating` en parallèle (pas de verrou global, contrairement au run).
+ */
+export type CandidatureStatus = "none" | "queued" | "generating" | "ready" | "failed";
+
+/**
+ * État de la candidature d'une offre (GET /api/offers/:id/candidature).
+ *
+ * - `offerId`     : identifiant de l'offre concernée.
+ * - `status`      : étape courante (cf. CandidatureStatus).
+ * - `cvReady`     : le PDF du CV existe (servi par .../candidature/cv).
+ * - `lettreReady` : la lettre existe (servie par .../candidature/lettre).
+ * - `generatedAt` : date ISO de la dernière génération réussie, ou null.
+ * - `error`       : message d'échec si `status = "failed"`, sinon null.
+ */
+export interface CandidatureState {
+  offerId: number;
+  status: CandidatureStatus;
+  cvReady: boolean;
+  lettreReady: boolean;
+  generatedAt: string | null;
+  error: string | null;
+}
+
+/**
+ * Événement SSE de GET /api/candidatures/stream : un changement d'état de
+ * candidature (une offre à la fois). `phase` est un libellé d'avancement humain
+ * best-effort, renseigné pendant `generating` (optionnel, compat ascendante).
+ */
+export interface CandidatureEvent extends CandidatureState {
+  phase?: string;
+}

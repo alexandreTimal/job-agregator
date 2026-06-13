@@ -20,6 +20,7 @@ import { registerRoutes } from "./routes/index";
 import { initDb } from "../store/sqlite";
 import { seedSettingsIfEmpty } from "../settings";
 import { getScheduler } from "./scheduler";
+import { candidatureManager } from "./candidature";
 
 const HOST = "127.0.0.1";
 // 5627 par défaut (« JOBS » sur un clavier téléphonique) — choisi pour laisser
@@ -85,6 +86,9 @@ async function start(): Promise<void> {
   const shutdown = (signal: string): void => {
     app.log.info(`Arrêt du serveur (${signal})`);
     scheduler.stop();
+    // Coupe les générations de candidature en cours (process detached) pour ne pas
+    // laisser d'agents orphelins survivre au redémarrage du service.
+    candidatureManager.shutdownAll();
     void app.close().finally(() => process.exit(0));
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
