@@ -6,3 +6,13 @@ data/
 .env
 .env.local
 _bmad-output/
+
+# Environnement Python du candidature-toolkit (weasyprint) — reconstructible
+.venv/
+__pycache__/
+# Sorties de candidature générées (PDF/CV par offre) — pas dans le repo
+candidature-toolkit/**/cv-offre*.json
+candidature-toolkit/**/cv-offre*.html
+candidature-toolkit/**/*.pdf
+# CV webapp autonome : régénérable via build_webapp.py, ~2 Mo (assets base64 embarqués)
+candidature-toolkit/webapp/cv_template.html
