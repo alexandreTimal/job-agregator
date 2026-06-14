@@ -1,113 +1,139 @@
 # job-agregator
 
-Agrégateur de jobboards **maison**, déterministe et sans interface : il récupère
-les offres à partir de **termes choisis à la main**, applique un **filtrage
-déterministe**, et pousse les offres retenues dans une **base Notion**.
+Agrégateur de jobboards **maison**, **déterministe** et **auditable**, doublé d'une
+**UI web locale** (mono-utilisateur, `localhost`). Il récupère **toutes** les offres
+à partir de **termes choisis à la main**, applique **son propre filtrage
+déterministe**, et **expose le résultat dans une UI web** (consultation, favoris,
+suppression, stats, déclenchement de run).
 
-Fork allégé de `Job_watcher` (voisin) — voir `CLAUDE.md` pour les conventions.
-
-## Flux
+Objectif : remplacer les alertes natives (peu fiables) et les filtres faibles des
+jobboards par un système maison, sans LLM, lisible en `git diff` et couvert par des
+tests.
 
 ```
-config/search.config.ts (termes, exclusions, salaire, lieux, contrat)
-        │
-        ▼
-[par terme × par source]  fetch  ──►  dédup (sqlite, hash composite)
-        │
-        ▼
-filtre déterministe (exclude / salaryMin / locations / contrat)
-        │
-        ▼
-score déterministe  ──►  export Notion (idempotent, anti-doublon)
+settings (sqlite) → fetch concurrent [1 tâche/source, tous les termes]
+                  → dedup (sqlite) → filtre déterministe → base sqlite ← UI web locale
 ```
+
+> Fork allégé de `Job_watcher` — voir `CLAUDE.md` pour les conventions complètes.
+> Pas de LLM, pas de Notion, pas d'onboarding/profil : volontairement déterministe.
+
+## Stack
+
+- **Pipeline** : Node + TypeScript + `better-sqlite3`.
+- **UI locale** : Fastify (API REST + SSE) + Vite/React + Tailwind CSS v4, liée à
+  `127.0.0.1` uniquement.
+- **Scraping** : Playwright (+ stealth) pour les sources web ; API JSON pour les
+  sources ATS.
 
 ## Installation
 
 ```bash
-npm install          # installe les deps + le binaire Chromium (Playwright)
-cp .env.example .env # puis renseigne NOTION_API_KEY et NOTION_DATABASE_ID
+npm install          # deps + binaire Chromium (Playwright, via postinstall)
+cp .env.example .env # toutes les variables sont OPTIONNELLES (voir le fichier)
 ```
+
+## Lancer l'UI web
+
+```bash
+npm run build        # build le SPA dans web/dist
+npm run serve        # sert l'UI sur http://127.0.0.1:5627 (surchargeable par PORT)
+```
+
+`npm run start` (= `build` + `serve`) reste pratique pour un lancement manuel
+one-shot. Après tout changement de code **frontend**, relancer `npm run build` pour
+rafraîchir `web/dist`.
+
+L'UI a **3 pages** : **Paramètres** (termes, types de contrat, sources actives,
+boards ATS), **Stats** et **Offres** (consultation, favoris, suppression,
+déclenchement de run).
+
+## Lancer un run en CLI
+
+Un run du pipeline est aussi lançable hors UI :
+
+```bash
+npm run fetch        # run réel → écrit en base sqlite
+npm run fetch:dry    # dry-run → log seulement, n'écrit pas
+```
+
+Depuis l'UI, le run est déclenché via `POST /api/run` : le serveur spawn le pipeline
+et relaie sa progression en **SSE** (`GET /api/run/stream`). Un verrou serveur
+garantit **un seul run à la fois**.
 
 ## Configuration
 
-Tout se pilote depuis `config/search.config.ts` (édition = `git diff`) :
+La config **effective** vit dans la table sqlite `settings`, seedée une première
+fois depuis `config/search.config.ts`. L'UI Paramètres pilote les champs dynamiques
+(`terms[]`, `contractTypes`, `enabledSources[]`, `atsBoards`). Les critères statiques
+(`exclude`, `salaryMin`, `locations`…) restent dans `config/search.config.ts`
+(édition = `git diff`) :
 
 ```ts
 export const config: SearchConfig = {
   terms: ["data engineer", "machine learning engineer"],
-  exclude: ["stage", "stagiaire", "alternance", "apprentissage"],
+  exclude: ["stage", "stagiaire", "alternance"],
   salaryMin: 45000,
   locations: ["Paris", "remote"],
   contractTypes: ["CDI"],
-  remote: "any",
-  defaultRadiusKm: 30,
-  maxPagesPerSource: 3,
+  // …
 };
 ```
 
-## Lancer
+Le filtrage vit entièrement dans `src/filter.ts` sous forme de **fonctions pures**
+`(offer, config) => boolean` — aucun I/O, aucun réseau, aucun LLM.
 
-```bash
-npm run fetch        # run réel → crée les pages Notion
-npm run fetch:dry    # dry-run → log seulement, ne touche pas Notion
-npm run typecheck    # vérification TypeScript
-```
+## Sources
 
-## Automatisation (cron local)
+- **Web** (Playwright) : WTTJ (session requise, ci-dessous), HelloWork.
+- **ATS** (API JSON par board d'entreprise) : Greenhouse, Lever — les tokens
+  d'entreprise se gèrent depuis l'UI Paramètres (`settings.atsBoards`).
 
-```cron
-# toutes les 4 h
-0 */4 * * * cd /chemin/job-agregator && /usr/bin/npm run fetch >> data/cron.log 2>&1
-```
+Chaque source implémente l'interface `ScrapingSource` et est **best-effort** : une
+source qui échoue/expire logge l'erreur et renvoie `[]` sans casser le run.
+L'orchestrateur lance **une tâche par source** (concurrence bornée + timeout) et la
+source boucle **tous les termes en interne** (un seul navigateur par hôte, sûr
+anti-bot).
 
-La base sqlite (`data/job-agregator.db`) persiste localement le dédup et le flag
-« déjà poussé dans Notion » : un run interrompu ne crée jamais de doublon.
+### WTTJ : session requise (connexion unique)
 
-## Base Notion attendue
-
-La base Notion cible doit exposer ces propriétés :
-
-| Propriété | Type |
-|---|---|
-| `Name` | Title |
-| `Poste` | Rich text |
-| `Source` | Select |
-| `Lien offre` | URL |
-| `Score` | Number |
-| `Priorité` | Select (🔴 Haute / 🟠 Moyenne / 🟢 Basse) |
-| `Statut` | Select (🔵 À postuler …) |
-| `Type contrat` | Select |
-| `Localisation` | Rich text |
-| `Date publication` | Date |
-| `Date relance` | Date |
-
-## Source WTTJ : session requise (connexion unique)
-
-Welcome to the Jungle a déplacé sa **recherche par mot-clé**
-(`/fr/jobs-matches?classic-search=1`) **derrière l'authentification** : un client
-non connecté est redirigé vers la page de connexion. La source WTTJ rejoue donc
-une **session Playwright** que tu exportes **une seule fois** :
+Welcome to the Jungle a placé sa recherche par mot-clé derrière l'authentification.
+La source rejoue une **session Playwright** exportée **une seule fois** :
 
 ```bash
 npm run wttj:login   # ouvre une fenêtre WTTJ → connecte-toi → reviens, Entrée
 ```
 
-- Tu te connectes **toi-même** dans la fenêtre ouverte (email/mot de passe ou
-  « Continuer avec … ») : **aucun mot de passe ne transite par le code**.
-- La session est écrite dans `data/wttj-session.json` (gitignored ; surchargeable
-  via `WTTJ_STORAGE_STATE`). À relancer quand elle expire — la source le signale
-  alors par un WARN explicite (« Redirigé vers la page de connexion »).
-- Sans session, WTTJ est **best-effort** : il loggue la consigne et renvoie `[]`
-  sans casser le run.
-- Pré-requis : un environnement **graphique** (le navigateur s'ouvre en visible).
+Tu te connectes **toi-même** dans la fenêtre (aucun mot de passe ne transite par le
+code). La session est écrite dans `data/wttj-session.json` (gitignored ; surchargeable
+via `WTTJ_STORAGE_STATE`). Sans session, WTTJ est best-effort (WARN + `[]`).
+Pré-requis : un environnement **graphique** (navigateur visible).
 
-## Sources
+## Tests & qualité
 
-- **MVP** : WTTJ (session requise, ci-dessus), HelloWork (scraping Playwright + stealth).
-- **Phase 1.5** (à porter depuis `Job_watcher/src/sources`) : Indeed, LinkedIn
-  (via email forwarding), Google Alerts (RSS), Station F, career pages.
-- **France Travail** (API officielle) : ajoutable trivialement, même interface
-  `ScrapingSource`.
+```bash
+npm test             # node:test via tsx (glob src/**/*.test.ts), zéro dép de test
+npm run typecheck    # vérification TypeScript (pipeline + serveur)
+npm run typecheck:web
+```
 
-> Les sources legacy sont **best-effort** : une source qui échoue logge l'erreur
-> et renvoie `[]` sans casser le run.
+Toute logique pure (filtre, mappers de sources, helpers) est couverte. Un test
+d'intégration exerce `runPipeline` sur une base sqlite **temporaire isolée**
+(jamais la vraie base). La base `data/job-agregator.db` est locale et
+reconstructible (gitignored).
+
+## Autostart (service systemd `--user`)
+
+```bash
+npm run autostart:install   # écrit ~/.config/systemd/user/job-agregator.service,
+                            # build le SPA une fois, active le linger, démarre
+```
+
+`ExecStart=npm run serve` ne rebuild pas : après un changement frontend, relancer
+`npm run build` (ou `npm run autostart:install`) pour rafraîchir `web/dist`.
+
+## Architecture
+
+Voir `CLAUDE.md` pour le détail des conventions (orchestration concurrente, dédup
+par hash composite, observabilité, design system UI, contrat d'API figé dans
+`docs/api-contract.md`).

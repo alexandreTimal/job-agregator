@@ -1,18 +1,26 @@
+# Dépendances & build
 node_modules/
 dist/
+
+# Données locales (base sqlite, logs, captures debug, sessions) — reconstructibles
 data/
 *.db
 *.db-*
+
+# Secrets
 .env
 .env.local
-_bmad-output/
 
-# Environnement Python du candidature-toolkit (weasyprint) — reconstructible
+# Environnement Python (weasyprint) — reconstructible
 .venv/
 __pycache__/
-# Sorties de candidature générées (PDF/CV par offre) — pas dans le repo
-candidature-toolkit/**/cv-offre*.json
-candidature-toolkit/**/cv-offre*.html
-candidature-toolkit/**/*.pdf
-# CV webapp autonome : régénérable via build_webapp.py, ~2 Mo (assets base64 embarqués)
-candidature-toolkit/webapp/cv_template.html
+
+# Outillage agent local (non lié au projet) — installs reproductibles
+.claude/skills/
+.claude/settings.local.json
+_bmad/
+_bmad-output/
+
+# Toolkit de candidature : machinerie CV/lettre personnelle (données perso,
+# photo, profil). Hors périmètre du repo public.
+candidature-toolkit/
