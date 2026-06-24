@@ -34,6 +34,28 @@ test("formes relatives françaises", () => {
   assert.ok(parsePublishedAt("il y a 2 semaines"));
 });
 
+test("sous-jour : « il y a N minutes/secondes » = aujourd'hui", () => {
+  // JobTeaser rend « il y a 12 minutes » : non reconnu auparavant (37 dates
+  // manquantes sur un run). Résolu au jour courant.
+  assert.equal(ymd("il y a 12 minutes"), ymd("aujourd'hui"));
+  assert.equal(ymd("il y a 30 secondes"), ymd("aujourd'hui"));
+});
+
+test("formes « le … dernier / passé » = il y a 1 unité", () => {
+  const JOUR = 24 * 60 * 60 * 1000;
+  const joursEntre = (a: Date, b: Date) => Math.round((a.getTime() - b.getTime()) / JOUR);
+  const ajd = parsePublishedAt("aujourd'hui")!;
+
+  // « le mois dernier » ≡ « il y a 1 mois ».
+  assert.equal(ymd("le mois dernier"), ymd("il y a 1 mois"));
+  assert.equal(ymd("le mois passé"), ymd("il y a 1 mois"));
+  // « la semaine dernière » = J-7.
+  assert.equal(joursEntre(ajd, parsePublishedAt("la semaine dernière")!), 7);
+  // « l'an dernier » / « l'année dernière » ≡ « il y a 1 an ».
+  assert.equal(ymd("l'an dernier"), ymd("il y a 1 an"));
+  assert.equal(ymd("l'année dernière"), ymd("il y a 1 an"));
+});
+
 test("« avant-hier » = J-2, distinct de « hier » (J-1)", () => {
   // Régression : `\bhier\b` matche aussi le « hier » d'« avant-hier ». On vérifie
   // que la branche dédiée le résout bien à J-2 et non J-1.
