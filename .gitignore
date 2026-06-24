@@ -24,3 +24,7 @@ _bmad-output/
 # Toolkit de candidature : machinerie CV/lettre personnelle (données perso,
 # photo, profil). Hors périmètre du repo public.
 candidature-toolkit/
+
+# Candidatures générées (CV + lettres en PDF par offre) : données perso, jamais
+# versionnées sur le repo public.
+candidatures/

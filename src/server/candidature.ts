@@ -65,8 +65,13 @@ const KILL_GRACE_MS = 5_000;
 /** Intervalle du heartbeat SSE. */
 const HEARTBEAT_MS = 15_000;
 
-/** Outils autorisés à l'agent headless (le strict nécessaire, pas de bypass total). */
-const ALLOWED_TOOLS = ["Skill", "Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "TodoWrite"];
+/**
+ * Outils autorisés à l'agent headless (le strict nécessaire, pas de bypass total).
+ * `Agent` est inclus pour DÉLÉGUER la mise en page à un sous-agent « fit » à contexte
+ * court (cf. buildPrompt) : le banc d'essai `experiments/fit-bench/` a montré que cette
+ * isolation donne la latence la plus rapide ET la plus constante, à fiabilité de fit égale.
+ */
+const ALLOWED_TOOLS = ["Skill", "Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebFetch", "TodoWrite", "Agent"];
 
 /**
  * Config MCP VIDE : avec `--strict-mcp-config`, l'agent ne charge AUCUN serveur
@@ -184,14 +189,29 @@ RÉCUPÉRATION DE L'OFFRE — IMPORTANT (évite les boucles) :
 - Si elle renvoie peu ou rien (jobboard protégé), NE CHERCHE PAS l'annonce ailleurs (pas d'autres WebFetch, pas de WebSearch) : appuie-toi sur l'intitulé + l'entreprise + le lieu + ta compréhension du type de poste, signale dans le récap que l'annonce n'a pas pu être lue intégralement, et CONTINUE. Mieux vaut un brouillon que tu reverras qu'une chasse coûteuse.
 ${consigne}
 DÉROULÉ (skills : cv-tailoring, cv-render, lettre-motivation) :
-1. cv-tailoring : repositionne le CV dans le vocabulaire de l'annonce. Honnêteté OBLIGATOIRE : ne jamais inventer une compétence absente, jamais "Python"/"ML"/"RAG", signaler les gaps. Décide SEUL le dosage IA selon le poste.
-2. cv-render : écris le JSON adapté dans ${p.json}. Le dossier de sortie peut contenir d'anciens fichiers d'une génération précédente : NE les ouvre PAS (ni cv-offre.json, ni meta.json, ni lettre.md), écris simplement par-dessus.
-   BUDGET DE PAGE (évite la boucle de fit) : le CV doit faire 1 page pleine, remplissage 94–100 % — inutile de viser le pour-cent près. Le CV maître fait ~70 lignes de contenu (repères : expérience ~26, distinctions ~8, compétences ~8, formation ~6, intérêts ~4). Calibre ton JSON sur ce volume pour rentrer DU PREMIER COUP.
-   Puis : lance --measure UNE fois (${VENV_PY} ${GENERATE_CV} ${p.json} --measure). Applique le conseil en UN SEUL edit FRANC (corrige plusieurs lignes d'un coup, pas au compte-goutte). Re-mesure UNE fois pour confirmer. AU PLUS 2 passes de --measure : si après ça tu es à 92–101 %, c'est bon, rends le PDF.
-   Rendu : ${VENV_PY} ${GENERATE_CV} ${p.json} --out ${p.cv}
-3. lettre-motivation : lettre ~300-350 mots, français, ton direct, chaque affirmation adossée à une expérience réelle, pas de tiret cadratin. Écris-la dans ${p.lettre}.
+1. cv-tailoring : repositionne le CV dans le vocabulaire de l'annonce. Honnêteté OBLIGATOIRE : ne jamais inventer une compétence absente, jamais "Python"/"ML"/"RAG", signaler les gaps.
+   DOSAGE IA — PORTE BINAIRE : l'agrégateur d'offres (projet perso IA) ne devient une ENTRÉE D'EXPÉRIENCE que si l'ANNONCE elle-même demande IA/GenAI/LLM/agents/ML/automatisation/data science dans ses missions ou son profil. Une entreprise qui "fait de l'IA quelque part" (practice Data/IA, secteur tech, mot "numérique" dans le titre) NE compte PAS. Par défaut (offre sans exigence IA explicite) : PAS d'entrée d'expérience pour l'agrégateur, au maximum UNE ligne dans Compétences.
+   ORDRE DES EXPÉRIENCES : les expériences en cours (date finissant par "Present") d'abord, puis les terminées par récence décroissante. Ne jamais placer un projet en cours sous une expérience terminée plus ancienne.
+   VOCABULAIRE : repère les termes exacts de l'annonce (ex. "cahier des charges", "comité de pilotage", "recette/homologation", "conduite du changement") et réinjecte-les MOT POUR MOT dans les puces là où c'est honnêtement vrai (un synonyme rate le scan recruteur).
+   SOURCE DE VÉRITÉ UNIQUE : le fichier profil-master.md du skill. N'explore PAS le code de ce repo (src/, web/, CLAUDE.md…) pour "enrichir" une expérience : le projet "agrégateur d'offres / job-agregator" est l'outil qui te lance, décris-le UNIQUEMENT depuis profil-master.md, jamais en lisant son code.
+   CLOISONNEMENT DES PROJETS : TrackMate (marketplace moto) et l'agrégateur d'offres (outillage perso) sont DEUX projets sans aucun rapport. Ne JAMAIS fusionner leurs faits : les détails de pipeline/agrégation/logs vont dans l'entrée "Projet personnel" dédiée, jamais dans une puce TrackMate.
+2. cv-render (CONTENU SEULEMENT) : écris le JSON adapté dans ${p.json}. N'émets PAS les en-têtes de section (h_exp/h_form/h_dist/h_comp/h_int) : le moteur les pose avec l'orthographe correcte, les retaper introduit des fautes. NE LANCE NI --measure NI le rendu toi-même : la mise en page est DÉLÉGUÉE (étape 3). Le dossier peut contenir d'anciens fichiers d'une génération précédente : NE les ouvre PAS, écris par-dessus.
+   Calibre le volume sur le CV maître (~70 lignes : expérience ~26, distinctions ~8, compétences ~8, formation ~6, intérêts ~4) pour partir près de la cible.
+3. MISE EN PAGE — DÉLÈGUE À UN SOUS-AGENT : appelle l'outil Agent (subagent_type "general-purpose") avec EXACTEMENT le prompt ci-dessous, et ATTENDS qu'il termine (il aura mesuré, ajusté le contenu et rendu ${p.cv}). Ne fais PAS la boucle de fit toi-même.
+---DÉBUT DU PROMPT DU SOUS-AGENT---
+Tu es un SPÉCIALISTE DE MISE EN PAGE de CV. Mission unique : faire que le CV décrit par le JSON ${p.json} tienne sur 1 page, remplissage 94–100 %, puis le rendre en PDF.
+OUTIL DE MESURE (déterministe) : ${VENV_PY} ${GENERATE_CV} ${p.json} --measure → JSON : status ("ok" | "overflow" | "underfull"), fits, header_fits, fill_ratio (1.0 = 100 %), overflow_lines, slack_lines, advice.
+PROTOCOLE STRICT — boucle SANS LIMITE de passes :
+1) Mesure.
+2) Si status == "overflow" : coupe AU MOINS (overflow_lines + 1) lignes dans les puces LES MOINS pertinentes pour l'offre — condense, ne supprime jamais un fait entier ; coupe FRANCHE d'un coup. Si status == "underfull" : RALLONGE les puces les plus pertinentes avec du détail réel issu de profil-master.md (jamais broder ni inventer). Si header_fits == false : raccourcis le champ sub1 (titre).
+3) Re-mesure. Répète tant que status != "ok" OU header_fits != true.
+INTERDICTION ABSOLUE : ne lance JAMAIS le rendu PDF tant que ta DERNIÈRE mesure n'est pas status=="ok" ET header_fits==true. Il n'y a AUCUN nombre maximum de passes ; continue jusqu'à ok.
+Quand (et seulement quand) la dernière mesure est ok : rends le PDF : ${VENV_PY} ${GENERATE_CV} ${p.json} --out ${p.cv}
+Tu ne touches qu'au CONTENU des puces, jamais aux faits ; tu n'inventes rien.
+---FIN DU PROMPT DU SOUS-AGENT---
+4. lettre-motivation : lettre ~300-350 mots, français, ton direct, chaque affirmation adossée à une expérience réelle, pas de tiret cadratin. Écris-la dans ${p.lettre}.
 
-SORTIES OBLIGATOIRES (écris réellement ces fichiers) : ${p.json} ; ${p.cv} ; ${p.lettre}
+SORTIES OBLIGATOIRES (écris réellement ces fichiers) : ${p.json} ; ${p.cv} (rendu par le sous-agent) ; ${p.lettre}
 Termine par un récap de 3 lignes : remplissage du CV, dosage IA, gaps éventuels.`;
 }
 
