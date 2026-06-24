@@ -17,6 +17,7 @@ import { getLastRunAtMs } from "../store/sqlite";
 import { triggerRun } from "./routes/run";
 import { nextFireDelay, shouldCatchUp } from "../lib/cron-schedule";
 import { notifyDesktop } from "../lib/notify";
+import { waitForConnectivity } from "../lib/network";
 import { createLogger } from "../lib/logger";
 
 const logger = createLogger("SCHEDULER");
@@ -67,6 +68,20 @@ class Scheduler {
       dernierRun: lastRunAt?.toISOString() ?? "jamais",
       horaires: settings.cronTimes,
     });
+    // Le serveur démarre au boot (systemd) ; le réseau n'est pas forcément
+    // connecté (connexion manuelle après login). Lancer le run tout de suite le
+    // ferait partir dans le vide (toutes sources en EAI_AGAIN, 0 offre). On
+    // attend donc la connectivité — fire-and-forget, jamais bloquant.
+    void this.triggerCatchUpWhenOnline();
+  }
+
+  /** Attend la connectivité réseau puis déclenche le run de rattrapage. */
+  private async triggerCatchUpWhenOnline(): Promise<void> {
+    const online = await waitForConnectivity();
+    if (!online) {
+      logger.warn("Rattrapage abandonné : réseau toujours indisponible après attente");
+      return;
+    }
     const started = triggerRun((event) => this.onRunComplete(event));
     if (!started) logger.warn("Rattrapage ignoré : un run est déjà en cours");
   }
