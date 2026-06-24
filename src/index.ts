@@ -64,14 +64,34 @@ function emit(event: RunEvent): void {
  * Filtres communs à toutes les sources web (le keyword est injecté par terme).
  * `locations` = villes pilotées par l'UI ; chaque ville devient une recherche
  * distincte côté source (cf. `locationSlots`) puisqu'aucun jobboard n'accepte
- * plusieurs villes en une requête. Le rayon reste un défaut statique global
- * (`defaultRadiusKm`). Le « remote » n'entre PAS dans la recherche (géré en
+ * plusieurs villes en une requête. Le rayon est un défaut statique global
+ * (`defaultRadiusKm`), surchargeable par ville via `radiusByCity` (ex. Lyon
+ * élargi à sa métropole). Le « remote » n'entre PAS dans la recherche (géré en
  * post-filtre) : on filtre défensivement le mot magique s'il traîne.
  */
+/**
+ * Rayon (km) à appliquer à une ville : surcharge `radiusByCity` (lookup
+ * insensible casse/accents) sinon `defaultRadiusKm` sinon `null`. Pure.
+ */
+export function radiusForCity(
+  label: string,
+  radiusByCity: Record<string, number> | undefined,
+  defaultRadiusKm: number | undefined,
+): number | null {
+  const nl = normalizeText(label);
+  for (const [city, km] of Object.entries(radiusByCity ?? {})) {
+    if (normalizeText(city) === nl) return km;
+  }
+  return defaultRadiusKm ?? null;
+}
+
 function buildBaseFilters(contractTypes: string[], locations: string[]): SearchFilters {
   const cityLocations = locations
     .filter((l) => normalizeText(l) !== "remote")
-    .map((label) => ({ label, radius: config.defaultRadiusKm ?? null }));
+    .map((label) => ({
+      label,
+      radius: radiusForCity(label, config.radiusByCity, config.defaultRadiusKm),
+    }));
 
   return {
     locations: cityLocations.length ? cityLocations : undefined,

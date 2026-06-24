@@ -5,11 +5,30 @@ import { createLogger } from "../lib/logger";
 import { ParseReport, finalizeOffers } from "../lib/parse-report";
 import type { RawScrapeResult, PageDiag } from "../lib/parse-report";
 import { captureFailure } from "../lib/debug-capture";
+import { locationSlots } from "./location-slots";
 
 const logger = createLogger("JOBTEASER");
 const BASE_URL = "https://www.jobteaser.com";
 const SEARCH_PATH = "/fr/job-offers";
 const CARD_SELECTOR = '[data-testid="jobad-card"]';
+
+/**
+ * Attente supplémentaire (ms) laissée à un challenge Cloudflare pour se résoudre
+ * tout seul avant d'abandonner la page (cf. `isChallengePage`). Le Turnstile
+ * « managed » de JobTeaser s'auto-résout en ~15-20 s sur une session froide.
+ */
+const CHALLENGE_WAIT_MS = 30_000;
+
+/**
+ * Attente du sélecteur de cartes. La PAGE 1 a droit à une attente longue (cold
+ * start + éventuel challenge). Les pages SUIVANTES n'attendent que brièvement :
+ * si la page 1 a rendu, une page 2 avec offres rend tout aussi vite (~2-3 s) ;
+ * une page 2 vide (fréquente : Algolia full-text rend ~1 page utile par requête)
+ * ne doit PAS coûter 15 s — c'était ~315 s gaspillées/run, suffisant pour faire
+ * dépasser le timeout de 600 s par source et affamer le slot Lyon.
+ */
+const CARD_WAIT_FIRST_PAGE_MS = 15_000;
+const CARD_WAIT_PAGINATION_MS = 6_000;
 
 /**
  * Lien d'une VRAIE offre : `/{lang}/job-offers/<uuid>-<slug>`. Sert à écarter les
@@ -21,17 +40,51 @@ const CARD_SELECTOR = '[data-testid="jobad-card"]';
  */
 const OFFER_HREF_RE = /\/[a-z]{2}\/job-offers\/[0-9a-f]{8}/i;
 
-/** JobTeaser n'expose que `q` (mot-clé) et `page` côté URL ; lieu/contrat = Algolia client. */
-export function buildSearchUrl(term: string, page: number): string {
+/**
+ * JobTeaser n'expose que `q` (mot-clé) et `page` côté URL ; lieu/contrat sont des
+ * facettes Algolia côté client, donc non paramétrables par URL. `query` peut
+ * déjà inclure la ville (« Product Manager Lyon ») : cf. `buildKeyword`.
+ */
+export function buildSearchUrl(query: string, page: number): string {
   const params = new URLSearchParams();
-  params.set("q", term);
+  params.set("q", query);
   if (page > 1) params.set("page", String(page));
   return `${BASE_URL}${SEARCH_PATH}?${params.toString()}`;
+}
+
+/**
+ * Émule la recherche par lieu (impossible via l'URL) en injectant la ville dans
+ * le mot-clé full-text. Sans ça, JobTeaser ne fait qu'UNE recherche nationale
+ * plafonnée à `maxPages` triée par pertinence : Paris (plus gros volume) remplit
+ * les pages et les offres lyonnaises sont enterrées au-delà, jamais collectées.
+ * Une « case » par ville (cf. `locationSlots`) donne à chaque ville ses propres
+ * pages. Compromis assumé : une offre dont le lieu n'est dans aucun champ
+ * indexé par Algolia ne remontera pas — mais elle serait de toute façon rejetée
+ * par le filtre de lieu (`filter.ts`), qui exige le nom de la ville. Fonction pure.
+ */
+export function buildKeyword(term: string, city: string | null): string {
+  return city ? `${term} ${city}` : term;
 }
 
 /** Fonction pure : un href est-il une offre réelle (et non une carte sponsorisée) ? */
 export function isJobOfferHref(href: string | null | undefined): boolean {
   return !!href && OFFER_HREF_RE.test(href);
+}
+
+/**
+ * Détecte une page de challenge anti-bot Cloudflare (« Test de sécurité » /
+ * Turnstile) servie à la place des résultats. JobTeaser est derrière Cloudflare :
+ * sur une session froide, la 1ʳᵉ requête reçoit ce challenge, qui s'auto-résout
+ * en ~15-20 s (cookie `cf_clearance`), donc APRÈS notre attente initiale du
+ * sélecteur de cartes — sans cette détection, la requête était jetée à tort.
+ * Pure (sur le HTML de la page) → testable. Marqueurs structurels stables (non
+ * localisés) + libellés visibles observés sur la capture post-mortem.
+ */
+export function isChallengePage(html: string | null | undefined): boolean {
+  if (!html) return false;
+  return /cdn-cgi\/challenge-platform|challenge-error-text|cf-turnstile|cf_chl_|Verify you are human|Just a moment/i.test(
+    html,
+  );
 }
 
 /** Résultat brut d'une page + diagnostic (cartes vues / ignorées). */
@@ -43,6 +96,7 @@ interface ScrapePageResult {
 async function scrapePage(
   page: Awaited<ReturnType<Awaited<ReturnType<typeof launchBrowser>>["newPage"]>>,
   url: string,
+  cardWaitMs: number = CARD_WAIT_FIRST_PAGE_MS,
 ): Promise<ScrapePageResult> {
   // `domcontentloaded` (pas `networkidle`) : SSR Next.js, les cartes sont dans le
   // HTML initial ; on attend ensuite explicitement le sélecteur de cartes.
@@ -60,10 +114,25 @@ async function scrapePage(
     await page.waitForTimeout(500);
   }
 
-  const cardsAppeared = await page
-    .waitForSelector(CARD_SELECTOR, { timeout: 15_000 })
+  let cardsAppeared = await page
+    .waitForSelector(CARD_SELECTOR, { timeout: cardWaitMs })
     .then(() => true)
     .catch(() => false);
+
+  // Challenge Cloudflare (cf. `isChallengePage`) : sur session froide, JobTeaser
+  // sert un « Test de sécurité » à la place des résultats. Il s'auto-résout après
+  // notre attente initiale → on le détecte et on lui laisse le temps de poser
+  // `cf_clearance` puis de recharger les vraies cartes, au lieu de jeter la page.
+  if (!cardsAppeared && isChallengePage(await page.content().catch(() => ""))) {
+    logger.warn("Challenge Cloudflare détecté — attente de la résolution automatique", {
+      url,
+      timeoutMs: CHALLENGE_WAIT_MS,
+    });
+    cardsAppeared = await page
+      .waitForSelector(CARD_SELECTOR, { timeout: CHALLENGE_WAIT_MS })
+      .then(() => true)
+      .catch(() => false);
+  }
 
   if (!cardsAppeared) {
     logger.warn("Sélecteur de cartes absent après attente", { selector: CARD_SELECTOR, url });
@@ -190,48 +259,68 @@ export const jobteaserSource: ScrapingSource = {
     try {
       const page = await browser.newPage();
 
-      // Pas de `locationSlots` : JobTeaser n'a aucun paramètre d'URL lieu/contrat
-      // (filtres Algolia côté client). On boucle seulement termes × pages, un seul
-      // navigateur (hôte jamais frappé en parallèle).
-      searchLoop: for (const [i, term] of terms.entries()) {
-        options?.onProgress?.({ term, termIndex: i + 1, totalTerms: terms.length });
+      // JobTeaser n'a aucun paramètre d'URL de lieu (facettes Algolia côté
+      // client) : on émule la recherche par ville en l'injectant dans le mot-clé
+      // (cf. `buildKeyword`). Une « case » par ville (cf. `locationSlots`) ×
+      // termes × pages, un seul navigateur (hôte jamais frappé en parallèle).
+      // La dédup par `urlSource` fusionne les offres vues dans plusieurs villes.
+      const slots = locationSlots(options?.filters);
 
-        for (let p = 1; p <= maxPages; p++) {
-          const url = buildSearchUrl(term, p);
-          logger.info(`Scraping page ${p}`, { term, url });
+      // Garde anti-faux-positif : l'injection de la ville dans le mot-clé fait que
+      // beaucoup de couples (terme, ville) renvoient légitimement 0 résultat. On
+      // ne suspecte donc le sélecteur (capture + WARN) que TANT QU'AUCUNE carte
+      // n'a encore été vue du run ; une fois prouvé, un 0 carte = simple recherche
+      // sans résultat (INFO), pas un sélecteur cassé.
+      let selectorProven = false;
 
-          const { raws, diag } = await scrapePage(page, url);
-          report.addPageDiag(diag);
-          logger.debug(`Page ${p} lue`, { term, cartes: diag.cardCount, ignorees: diag.dropped });
+      searchLoop: for (const slot of slots) {
+        const city = slot?.label ?? null;
+        const lieu = city ?? "—";
 
-          if (diag.cardCount === 0) {
-            if (p === 1) {
-              const artefacts = await captureFailure(page, "jobteaser", "zero-cards");
-              logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
-                selector: CARD_SELECTOR,
-                term,
-                url,
-                capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
-              });
-            } else {
-              logger.info(`Aucune offre page ${p}, arrêt pagination`, { term });
+        for (const [i, term] of terms.entries()) {
+          options?.onProgress?.({ term, termIndex: i + 1, totalTerms: terms.length });
+          const keyword = buildKeyword(term, city);
+
+          for (let p = 1; p <= maxPages; p++) {
+            const url = buildSearchUrl(keyword, p);
+            logger.info(`Scraping page ${p}`, { term, lieu, url });
+
+            const cardWaitMs = p === 1 ? CARD_WAIT_FIRST_PAGE_MS : CARD_WAIT_PAGINATION_MS;
+            const { raws, diag } = await scrapePage(page, url, cardWaitMs);
+            report.addPageDiag(diag);
+            logger.debug(`Page ${p} lue`, { term, lieu, cartes: diag.cardCount, ignorees: diag.dropped });
+
+            if (diag.cardCount === 0) {
+              if (p === 1 && !selectorProven) {
+                const artefacts = await captureFailure(page, "jobteaser", "zero-cards");
+                logger.warn("0 carte sur la page 1 — sélecteur racine probablement cassé", {
+                  selector: CARD_SELECTOR,
+                  term,
+                  lieu,
+                  url,
+                  capture: artefacts ? `${artefacts}.html / .png` : "échec capture",
+                });
+              } else {
+                logger.info(`Aucune offre page ${p}, arrêt pagination`, { term, lieu });
+              }
+              break; // boucle de pages seulement → (lieu, terme) suivant
             }
-            break; // boucle de pages seulement → terme suivant
+            selectorProven = true; // au moins une carte vue → sélecteur OK
+
+            const pageOffers = finalizeOffers(raws, "jobteaser", report);
+            for (const offer of pageOffers) {
+              if (!seen.has(offer.urlSource)) {
+                seen.add(offer.urlSource);
+                allOffers.push(offer);
+              }
+            }
+
+            if (limit && allOffers.length >= limit) break searchLoop;
+            if (p < maxPages) await page.waitForTimeout(1500);
           }
 
-          const pageOffers = finalizeOffers(raws, "jobteaser", report);
-          for (const offer of pageOffers) {
-            if (!seen.has(offer.urlSource)) {
-              seen.add(offer.urlSource);
-              allOffers.push(offer);
-            }
-          }
-
-          if (limit && allOffers.length >= limit) break searchLoop;
-          if (p < maxPages) await page.waitForTimeout(1500);
+          await page.waitForTimeout(1500); // délai poli entre deux recherches
         }
-
-        await page.waitForTimeout(1500); // délai poli entre deux recherches
       }
 
       report.log(logger);

@@ -1,5 +1,6 @@
 import type { RawJobOffer, Priority } from "./lib/types";
 import { normalizeText } from "./lib/normalize";
+import { acceptedLocationTokens } from "./lib/metro-areas";
 import { classifyContractType } from "./lib/contract-type";
 import type { SearchConfig } from "../config/search.config";
 
@@ -70,14 +71,19 @@ export function passesFilters(
     }
   }
 
-  // 4) Localisation (lenient si null) ; "remote" accepté si l'offre est distante
+  // 4) Localisation (lenient si null) ; "remote" accepté si l'offre est distante.
+  // Une ville demandée matche aussi les communes de sa métropole (cf.
+  // `acceptedLocationTokens` : « Villeurbanne » compte pour Lyon) — sinon les
+  // offres de banlieue proche, pourtant ramenées par le rayon de recherche des
+  // sources, étaient rejetées faute de contenir le nom de la ville-centre.
   if (config.locations?.length && offer.location) {
     const ol = normalizeText(offer.location);
     const wantsRemote = config.locations.some((l) => normalizeText(l) === "remote");
     const isRemote = /(remote|teletravail|full remote|100 remote)/.test(ol);
     const cityMatch = config.locations.some((l) => {
       const nl = normalizeText(l);
-      return nl !== "remote" && nl !== "" && ol.includes(nl);
+      if (nl === "remote" || nl === "") return false;
+      return acceptedLocationTokens(l).some((tok) => ol.includes(tok));
     });
     if (!cityMatch && !(wantsRemote && isRemote)) {
       return { passed: false, reason: `lieu:${offer.location}` };

@@ -9,6 +9,10 @@
  * - `maxOfferAgeDays`: ancienneté max de mise en ligne, en jours (0 = sans limite,
  *                    lenient : offre sans date de publication passe).
  * - `remote`      : préférence remote transmise aux sources qui la supportent.
+ * - `defaultRadiusKm`: rayon de recherche par défaut (km) appliqué à chaque ville.
+ * - `radiusByCity` : rayon spécifique par ville (km) — surcharge `defaultRadiusKm`.
+ *                    Ex. élargir Lyon pour capter sa métropole (Villeurbanne…).
+ *                    Lookup insensible à la casse/aux accents.
  *
  * Édition = `git diff`. Aucune infra, aucun LLM : filtrage 100 % déterministe.
  */
@@ -21,6 +25,7 @@ export interface SearchConfig {
   maxOfferAgeDays?: number;
   remote?: "onsite" | "hybrid" | "remote" | "any";
   defaultRadiusKm?: number;
+  radiusByCity?: Record<string, number>;
   maxPagesPerSource?: number;
 }
 
@@ -33,5 +38,8 @@ export const config: SearchConfig = {
   maxOfferAgeDays: 7,
   remote: "any",
   defaultRadiusKm: 30,
+  // Lyon élargi : sa métropole (Villeurbanne, Vénissieux…) tient dans ~50 km,
+  // là où ces postes (souvent parisiens) sont rares — on ratisse plus large.
+  radiusByCity: { Lyon: 50 },
   maxPagesPerSource: 3,
 };

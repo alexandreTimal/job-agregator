@@ -136,3 +136,52 @@ test("contrat : sans contractTypes configuré → aucune contrainte de contrat",
   assert.equal(passesFilters(contractOffer("Stage Whatever"), cfg, NOW).passed, true);
   assert.equal(passesFilters(contractOffer("Senior Whatever"), cfg, NOW).passed, true);
 });
+
+// --- Filtre par localisation (villes + métropole + remote) ---
+
+/** Offre au lieu custom (le reste neutre). */
+function locationOffer(location: string | null): RawJobOffer {
+  return {
+    title: "data engineer",
+    company: "Acme",
+    location,
+    salary: null,
+    contractType: null,
+    urlSource: "https://example.com/1",
+    sourceName: "test",
+    publishedAt: null,
+  };
+}
+
+/** Config ne contraignant QUE le lieu. */
+function locConfig(locations: string[]): SearchConfig {
+  return { terms: ["data engineer"], exclude: [], locations };
+}
+
+test("lieu : ville demandée matchée en sous-chaîne, accents/casse ignorés", () => {
+  assert.equal(passesFilters(locationOffer("Lyon 3e"), locConfig(["Lyon"]), NOW).passed, true);
+  assert.equal(passesFilters(locationOffer("LYON"), locConfig(["lyon"]), NOW).passed, true);
+});
+
+test("lieu : commune de la métropole acceptée (Villeurbanne compte pour Lyon)", () => {
+  // Le cœur du levier « métropole » : sans table, Villeurbanne était rejeté.
+  assert.equal(passesFilters(locationOffer("Villeurbanne"), locConfig(["Lyon"]), NOW).passed, true);
+  assert.equal(passesFilters(locationOffer("Vénissieux"), locConfig(["Lyon"]), NOW).passed, true);
+  assert.equal(passesFilters(locationOffer("La Défense"), locConfig(["Paris"]), NOW).passed, true);
+});
+
+test("lieu : ville hors périmètre rejetée avec reason lieu:<valeur>", () => {
+  const v = passesFilters(locationOffer("Marseille"), locConfig(["Lyon"]), NOW);
+  assert.equal(v.passed, false);
+  assert.equal(v.reason, "lieu:Marseille");
+});
+
+test("lieu : lenient si location absente", () => {
+  assert.equal(passesFilters(locationOffer(null), locConfig(["Lyon"]), NOW).passed, true);
+});
+
+test("lieu : 'remote' demandé → offre distante passe même hors villes", () => {
+  const cfg = locConfig(["Lyon", "remote"]);
+  assert.equal(passesFilters(locationOffer("Full remote"), cfg, NOW).passed, true);
+  assert.equal(passesFilters(locationOffer("Télétravail"), cfg, NOW).passed, true);
+});
