@@ -15,6 +15,7 @@ import {
   Plus,
   X,
   Tags,
+  Ban,
   FileSignature,
   Globe,
   TriangleAlert,
@@ -129,6 +130,8 @@ export default function Settings() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [newTerm, setNewTerm] = useState("");
+  /** Saisie en cours du champ « Ajouter un mot banni » (titleBlacklist). */
+  const [newBan, setNewBan] = useState("");
   /** Saisie en cours du champ « Ajouter un board », indexée par nom de source ATS. */
   const [boardDrafts, setBoardDrafts] = useState<Record<string, string>>({});
   /** Brouillon string du champ ancienneté (autorise un champ vide pendant l'édition). */
@@ -141,6 +144,8 @@ export default function Settings() {
   const [dirty, setDirty] = useState(false);
   /** Pour rendre le focus au champ d'ajout après suppression d'un chip de terme. */
   const addInputRef = useRef<HTMLInputElement>(null);
+  /** Idem pour le champ d'ajout de mot banni. */
+  const addBanRef = useRef<HTMLInputElement>(null);
   /** Idem pour le champ d'ajout de ville. */
   const addLocationRef = useRef<HTMLInputElement>(null);
 
@@ -151,7 +156,12 @@ export default function Settings() {
       .getSettings()
       .then((s) => {
         if (!cancelled) {
-          setSettings({ ...s, terms: dedupeTerms(s.terms), atsBoards: s.atsBoards ?? {} });
+          setSettings({
+            ...s,
+            terms: dedupeTerms(s.terms),
+            titleBlacklist: dedupeTerms(s.titleBlacklist ?? []),
+            atsBoards: s.atsBoards ?? {},
+          });
           setAgeDraft(String(s.maxOfferAgeDays));
           setSalaryDraft(String(s.salaryMin));
         }
@@ -199,6 +209,24 @@ export default function Settings() {
     // Le chip supprimé disparaît du DOM : on évite de perdre le focus sur <body>
     // en le rendant au champ d'ajout.
     addInputRef.current?.focus();
+  }
+
+  function addBan(): void {
+    if (!settings) return;
+    const trimmed = newBan.trim();
+    if (!trimmed) return;
+    patch({ ...settings, titleBlacklist: dedupeTerms([...settings.titleBlacklist, trimmed]) });
+    setNewBan("");
+  }
+
+  function removeBan(index: number): void {
+    if (!settings) return;
+    patch({
+      ...settings,
+      titleBlacklist: settings.titleBlacklist.filter((_, i) => i !== index),
+    });
+    // Cf. removeTerm : on ne perd pas le focus sur <body> quand le chip disparaît.
+    addBanRef.current?.focus();
   }
 
   function toggleContractType(value: string): void {
@@ -400,6 +428,62 @@ export default function Settings() {
             className="flex-1"
           />
           <Button type="submit" variant="signal" disabled={!newTerm.trim()}>
+            <Plus aria-hidden="true" className="size-4" />
+            Ajouter
+          </Button>
+        </form>
+      </Card>
+
+      {/* --- Mots bannis (titre) -------------------------------------- */}
+      <Card className="animate-rise p-6">
+        <SectionTitle
+          icon={<Ban />}
+          title="Mots bannis (titre)"
+          hint="Une offre est écartée si l'un de ces mots apparaît, en mot entier, dans son titre. Insensible à la casse et aux accents."
+        />
+
+        {settings.titleBlacklist.length === 0 ? (
+          <p className="mb-4 text-sm italic text-[var(--color-ink-mute)]">
+            Aucun mot banni. Ajoutez-en un pour écarter les titres hors-sujet.
+          </p>
+        ) : (
+          <ul className="mb-4 flex flex-wrap gap-2">
+            {settings.titleBlacklist.map((word, index) => (
+              <li
+                key={`${index}-${word}`}
+                className="group inline-flex items-center gap-2 rounded-full border border-[var(--color-line-strong)] bg-black/25 py-1.5 pl-3.5 pr-1.5 text-sm text-[var(--color-ink-soft)] transition-colors hover:border-[var(--color-danger)]/40"
+              >
+                <span className="font-[family-name:var(--font-mono)] text-[0.8rem]">{word}</span>
+                <button
+                  type="button"
+                  aria-label={`Retirer le mot banni « ${word} »`}
+                  onClick={() => removeBan(index)}
+                  className="grid size-6 place-items-center rounded-full text-[var(--color-ink-mute)] transition-colors hover:bg-[var(--color-danger)]/15 hover:text-[var(--color-danger)]"
+                >
+                  <X aria-hidden="true" className="size-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            addBan();
+          }}
+        >
+          <Input
+            ref={addBanRef}
+            type="text"
+            aria-label="Nouveau mot banni dans le titre"
+            value={newBan}
+            placeholder="ex. sales"
+            onChange={(e) => setNewBan(e.target.value)}
+            className="flex-1"
+          />
+          <Button type="submit" variant="signal" disabled={!newBan.trim()}>
             <Plus aria-hidden="true" className="size-4" />
             Ajouter
           </Button>

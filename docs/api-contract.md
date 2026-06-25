@@ -93,6 +93,7 @@ Réponse `200` : `Settings`
   "locations": ["Paris", "Lyon"],
   "remoteOk": true,
   "maxOfferAgeDays": 7,
+  "titleBlacklist": ["sales", "lead"],
   "cronEnabled": false,
   "cronTimes": ["08:00", "20:00"]
 }
@@ -112,6 +113,10 @@ Réponse `200` : `Settings`
 - `maxOfferAgeDays` : ancienneté max de mise en ligne, en jours. Entier ≥ 0 ;
   `0` = sans limite (défaut `7`). Une offre sans date de publication est conservée
   (filtre lenient).
+- `titleBlacklist` : mots qui écartent une offre quand ils apparaissent comme MOT
+  ENTIER dans le TITRE seul (jamais l'entreprise), insensible casse/accents. Une
+  entrée multi-mots matche la séquence exacte. Distinct d'`exclude` (statique,
+  sous-chaîne, titre + entreprise). Liste vide = aucun bannissement.
 - `cronEnabled` : booléen. Quand vrai, le scheduler in-process déclenche un run à
   chaque horaire de `cronTimes` (défaut `false`).
 - `cronTimes` : horaires quotidiens `"HH:MM"` (heure locale, `00:00`→`23:59`),
@@ -132,6 +137,8 @@ Remplace la configuration effective.
   booléen obligatoire.
 - `maxOfferAgeDays` : entier ≥ 0 obligatoire (`0` = sans limite). Un nombre
   non entier ou négatif rend le corps invalide.
+- `titleBlacklist` : tableau de chaînes (peut être vide). Lenient comme
+  `atsBoards` : absent → `[]`. Les chaînes sont trimmées et dédoublonnées.
 - `cronEnabled` : booléen obligatoire.
 - `cronTimes` : tableau de chaînes `"HH:MM"` valides ; toute valeur hors format
   rend le corps invalide. Après écriture, le scheduler est rechargé.

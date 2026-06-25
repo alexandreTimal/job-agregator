@@ -279,6 +279,7 @@ async function main(): Promise<void> {
     salaryMin: settings.salaryMin,
     locations: [...settings.locations, ...(settings.remoteOk ? ["remote"] : [])],
     maxOfferAgeDays: settings.maxOfferAgeDays,
+    titleBlacklist: settings.titleBlacklist,
   };
 
   logger.info("Démarrage", {

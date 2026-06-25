@@ -3,6 +3,9 @@
  *
  * - `terms`       : termes envoyés en `keyword` à chaque source (= ce que tu cherches).
  * - `exclude`     : mots-clés qui disqualifient une offre (matchés sur titre + entreprise).
+ * - `titleBlacklist`: mots qui bannissent une offre quand ils apparaissent comme MOT
+ *                    ENTIER dans le TITRE seul (insensible casse/accents). Piloté par
+ *                    l'UI. Distinct d'`exclude` (sous-chaîne, titre + entreprise).
  * - `salaryMin`   : salaire annuel minimum (€) — lenient : une offre sans salaire passe.
  * - `locations`   : villes acceptées + "remote" (lenient : offre sans lieu passe).
  * - `contractTypes`: types de contrat acceptés (lenient : offre sans contrat passe).
@@ -19,6 +22,7 @@
 export interface SearchConfig {
   terms: string[];
   exclude: string[];
+  titleBlacklist?: string[];
   salaryMin?: number;
   locations?: string[];
   contractTypes?: string[];
@@ -32,6 +36,9 @@ export interface SearchConfig {
 export const config: SearchConfig = {
   terms: ["data engineer", "machine learning engineer"],
   exclude: ["stage", "stagiaire", "alternance", "apprentissage"],
+  // Bannissement par mot entier sur le titre seul — piloté depuis l'UI Paramètres.
+  // Vide par défaut : aucun mot banni tant que l'utilisateur n'en ajoute pas.
+  titleBlacklist: [],
   salaryMin: 45000,
   locations: ["Paris", "remote"],
   contractTypes: ["CDI"],

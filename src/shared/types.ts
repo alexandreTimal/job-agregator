@@ -60,6 +60,10 @@ export type OfferSort = "recent" | "score";
  * - `remoteOk`      : accepte les offres en télétravail (en plus des `locations`).
  * - `maxOfferAgeDays`: ancienneté max de mise en ligne en jours (entier ≥ 0 ;
  *                     0 = sans limite). Une offre sans `publishedAt` passe (lenient).
+ * - `titleBlacklist`: mots qui bannissent une offre quand ils apparaissent comme
+ *                     MOT ENTIER dans le TITRE (jamais l'entreprise), insensible
+ *                     casse/accents. Distinct de l'`exclude` statique (titre +
+ *                     entreprise, sous-chaîne). Liste vide = aucun bannissement.
  * - `cronEnabled`   : active la planification automatique des runs (scheduler serveur).
  * - `cronTimes`     : horaires quotidiens "HH:MM" (heure locale) des runs planifiés.
  */
@@ -72,6 +76,7 @@ export interface Settings {
   locations: string[];
   remoteOk: boolean;
   maxOfferAgeDays: number;
+  titleBlacklist: string[];
   cronEnabled: boolean;
   cronTimes: string[];
 }

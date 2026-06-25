@@ -52,6 +52,20 @@ export function passesFilters(
     }
   }
 
+  // 1b) Blacklist de titre (mot ENTIER, TITRE seul) — pilotée par l'UI, distincte
+  // de l'exclude auto-seedé : pas de neutralisation « famille stage », pas de
+  // match entreprise. On enveloppe titre normalisé ET terme d'espaces pour borner
+  // sur des mots entiers sans regex (gère aussi les expressions multi-mots) :
+  // " lead " match " lead data engineer " mais pas " leadership analyst ".
+  const paddedTitle = ` ${normalizeText(offer.title)} `;
+  for (const term of config.titleBlacklist ?? []) {
+    const needle = normalizeText(term);
+    if (!needle) continue;
+    if (paddedTitle.includes(` ${needle} `)) {
+      return { passed: false, reason: `titre-banni:${term}` };
+    }
+  }
+
   // 2) Type de contrat — classification déterministe (stage vs CDI). Tranche même
   // sans valeur brute : LinkedIn/Greenhouse laissent contractType null, on classe
   // alors sur le titre. (La recherche LinkedIn est en plus contrainte en amont via

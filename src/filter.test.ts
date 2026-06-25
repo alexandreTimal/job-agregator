@@ -185,3 +185,58 @@ test("lieu : 'remote' demandé → offre distante passe même hors villes", () =
   assert.equal(passesFilters(locationOffer("Full remote"), cfg, NOW).passed, true);
   assert.equal(passesFilters(locationOffer("Télétravail"), cfg, NOW).passed, true);
 });
+
+// --- Blacklist de titre (mot entier, titre seul, insensible casse/accents) ---
+
+/** Offre au titre/entreprise custom, sans aucune autre contrainte de filtre. */
+function titleOffer(title: string, company: string | null = "Acme"): RawJobOffer {
+  return {
+    title,
+    company,
+    location: null,
+    salary: null,
+    contractType: null,
+    urlSource: "https://example.com/1",
+    sourceName: "test",
+    publishedAt: null,
+  };
+}
+
+/** Config ne contraignant QUE la blacklist de titre. */
+function banConfig(titleBlacklist: string[]): SearchConfig {
+  return { terms: ["data engineer"], exclude: [], titleBlacklist };
+}
+
+test("blacklist titre : mot entier présent → rejeté avec reason titre-banni:<mot>", () => {
+  const v = passesFilters(titleOffer("Lead Data Engineer"), banConfig(["lead"]), NOW);
+  assert.equal(v.passed, false);
+  assert.equal(v.reason, "titre-banni:lead");
+});
+
+test("blacklist titre : sous-chaîne d'un autre mot ne bannit PAS", () => {
+  // « lead » ne doit pas tuer « Leadership » (cœur du choix mot-entier).
+  assert.equal(passesFilters(titleOffer("Leadership Analyst"), banConfig(["lead"]), NOW).passed, true);
+});
+
+test("blacklist titre : match sur le TITRE seul, jamais l'entreprise", () => {
+  // Le mot est dans l'entreprise, pas le titre → l'offre passe.
+  const v = passesFilters(titleOffer("Data Engineer", "Acme Sales"), banConfig(["sales"]), NOW);
+  assert.equal(v.passed, true);
+});
+
+test("blacklist titre : insensible à la casse et aux accents", () => {
+  assert.equal(passesFilters(titleOffer("Modele 3D Designer"), banConfig(["modèle"]), NOW).passed, false);
+  assert.equal(passesFilters(titleOffer("SALES Engineer"), banConfig(["sales"]), NOW).passed, false);
+});
+
+test("blacklist titre : expression multi-mots matche la séquence exacte", () => {
+  assert.equal(passesFilters(titleOffer("Data Center Technician"), banConfig(["data center"]), NOW).passed, false);
+  // Les mots existent séparément mais pas la séquence → passe.
+  assert.equal(passesFilters(titleOffer("Data Engineer (Center team)"), banConfig(["data center"]), NOW).passed, true);
+});
+
+test("blacklist titre : liste vide ou absente → aucun bannissement", () => {
+  assert.equal(passesFilters(titleOffer("Lead Data Engineer"), banConfig([]), NOW).passed, true);
+  const noField: SearchConfig = { terms: ["data engineer"], exclude: [] };
+  assert.equal(passesFilters(titleOffer("Lead Data Engineer"), noField, NOW).passed, true);
+});

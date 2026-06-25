@@ -73,6 +73,11 @@ function parseSettingsBody(body: unknown): Settings | null {
     return null;
   }
 
+  // titleBlacklist : tableau de chaînes (mots bannis sur le titre). Lenient comme
+  // `atsBoards` : un corps legacy sans ce champ vaut liste vide plutôt que 400.
+  const titleBlacklist = candidate.titleBlacklist === undefined ? [] : candidate.titleBlacklist;
+  if (!isStringArray(titleBlacklist)) return null;
+
   // cronEnabled : booléen ; cronTimes : tableau d'horaires "HH:MM" valides.
   if (typeof candidate.cronEnabled !== "boolean") return null;
   if (!isStringArray(candidate.cronTimes)) return null;
@@ -99,6 +104,7 @@ function parseSettingsBody(body: unknown): Settings | null {
     locations: clean(candidate.locations),
     remoteOk: candidate.remoteOk,
     maxOfferAgeDays,
+    titleBlacklist: clean(titleBlacklist),
     cronEnabled: candidate.cronEnabled,
     cronTimes: clean(candidate.cronTimes),
   };

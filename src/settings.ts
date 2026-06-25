@@ -9,9 +9,10 @@
  *
  * Seuls les champs pilotés par l'UI vivent ici : `terms`, `contractTypes`
  * (valeurs possibles "stage" et "CDI"), `enabledSources`, `atsBoards`,
- * `salaryMin`, `locations` (villes) + `remoteOk` (télétravail), et
- * `maxOfferAgeDays` (ancienneté max de mise en ligne, 0 = sans limite). Les autres
- * critères de filtrage (exclude, defaultRadiusKm…) restent dans search.config.ts.
+ * `salaryMin`, `locations` (villes) + `remoteOk` (télétravail),
+ * `maxOfferAgeDays` (ancienneté max de mise en ligne, 0 = sans limite) et
+ * `titleBlacklist` (mots bannis sur le titre seul). Les autres critères de
+ * filtrage (exclude, defaultRadiusKm…) restent dans search.config.ts.
  */
 import type { Settings } from "./shared/types";
 import { getSettingsRaw, setSettingRaw, settingsEmpty } from "./store/sqlite";
@@ -26,6 +27,7 @@ const KEY_SALARY_MIN = "salaryMin";
 const KEY_LOCATIONS = "locations";
 const KEY_REMOTE_OK = "remoteOk";
 const KEY_MAX_OFFER_AGE_DAYS = "maxOfferAgeDays";
+const KEY_TITLE_BLACKLIST = "titleBlacklist";
 const KEY_CRON_ENABLED = "cronEnabled";
 const KEY_CRON_TIMES = "cronTimes";
 
@@ -87,6 +89,7 @@ function seedValues(): Settings {
     locations: cities,
     remoteOk,
     maxOfferAgeDays: config.maxOfferAgeDays ?? DEFAULT_MAX_OFFER_AGE_DAYS,
+    titleBlacklist: config.titleBlacklist ?? [],
     cronEnabled: false,
     cronTimes: [...DEFAULT_CRON_TIMES],
   };
@@ -113,6 +116,7 @@ export function getSettings(): Settings {
     // Booléen absent → on retombe sur le seed (≠ cronEnabled qui défaut à false).
     remoteOk: raw[KEY_REMOTE_OK] === undefined ? seed.remoteOk : raw[KEY_REMOTE_OK] === "true",
     maxOfferAgeDays: parseNonNegativeInt(raw[KEY_MAX_OFFER_AGE_DAYS], seed.maxOfferAgeDays),
+    titleBlacklist: parseList(raw[KEY_TITLE_BLACKLIST], seed.titleBlacklist),
     cronEnabled: raw[KEY_CRON_ENABLED] === "true",
     cronTimes: parseList(raw[KEY_CRON_TIMES], seed.cronTimes),
   };
@@ -128,6 +132,7 @@ export function setSettings(settings: Settings): void {
   setSettingRaw(KEY_LOCATIONS, JSON.stringify(settings.locations));
   setSettingRaw(KEY_REMOTE_OK, String(settings.remoteOk));
   setSettingRaw(KEY_MAX_OFFER_AGE_DAYS, String(settings.maxOfferAgeDays));
+  setSettingRaw(KEY_TITLE_BLACKLIST, JSON.stringify(settings.titleBlacklist));
   setSettingRaw(KEY_CRON_ENABLED, String(settings.cronEnabled));
   setSettingRaw(KEY_CRON_TIMES, JSON.stringify(settings.cronTimes));
 }

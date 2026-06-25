@@ -68,6 +68,7 @@ const baseSettings: Settings = {
   locations: [],
   remoteOk: false,
   maxOfferAgeDays: 0,
+  titleBlacklist: [],
   // Champs cron (requis par le type `Settings`) : neutres pour ce test d'orchestration.
   cronEnabled: false,
   cronTimes: [],

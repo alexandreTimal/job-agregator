@@ -53,6 +53,7 @@ const baseSettings: Settings = {
   locations: [],
   remoteOk: false,
   maxOfferAgeDays: 0,
+  titleBlacklist: [],
   cronEnabled: false,
   cronTimes: [],
 };
