@@ -13,21 +13,18 @@ const logger = createLogger("NOTIFY");
 
 /**
  * Construit (titre, corps) de la notification de FIN de run — fonction PURE,
- * testable sans spawn. Échec → message d'erreur ; succès → bilan « X offres
- * trouvées · Y nouvelles » (pluralisation FR). `found` = total trouvé sur le run,
- * `newOffers` = nouvelles retenues (cf. événement `done`).
+ * testable sans spawn. Échec → message d'erreur ; succès → UNIQUEMENT le nombre
+ * de **nouvelles offres** (`newOffers`), c.-à-d. exactement celles qui viennent
+ * d'être ajoutées et apparaîtront dans la boîte « Toutes » du dashboard (non
+ * doublons ET retenues par le filtre). Pas de total « trouvées » ni autre détail.
  */
 export function formatRunNotification(event: RunEvent): { title: string; body: string } {
   if (event.type === "error") {
     return { title: "job-agregator — run en échec", body: event.message ?? "Erreur inconnue." };
   }
-  const found = event.found ?? 0;
   const fresh = event.newOffers ?? 0;
-  const s = (n: number): string => (n > 1 ? "s" : "");
   const body =
-    found === 0
-      ? "Aucune offre trouvée."
-      : `${found} offre${s(found)} trouvée${s(found)} · ${fresh} nouvelle${s(fresh)}.`;
+    fresh === 0 ? "Aucune nouvelle offre." : `${fresh} nouvelle${fresh > 1 ? "s" : ""} offre${fresh > 1 ? "s" : ""}.`;
   return { title: "job-agregator — recherche terminée", body };
 }
 

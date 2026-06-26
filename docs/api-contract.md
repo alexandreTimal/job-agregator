@@ -128,9 +128,11 @@ Réponse `200` : `Settings`
 
 **Notification bureau de fin de run** : à la fin de **tout** run — planifié (cron)
 comme manuel (`POST /api/run`) — une notification bureau (`notify-send`/libnotify,
-best-effort) annonce le bilan : succès « X offres trouvées · Y nouvelles », ou le
-message d'erreur en cas d'échec. Aucune notif n'élève d'erreur (binaire absent /
-session sans `DISPLAY` → WARN loggé, run inchangé).
+best-effort) annonce le **nombre de nouvelles offres** (« N nouvelles offres » /
+« Aucune nouvelle offre »), c.-à-d. exactement celles ajoutées à la boîte « Toutes »
+(non doublons ET retenues par le filtre), sans total « trouvées ». En cas d'échec,
+le message d'erreur. Aucune notif n'élève d'erreur (binaire absent / session sans
+`DISPLAY` → WARN loggé, run inchangé).
 
 ### PUT /api/settings
 
