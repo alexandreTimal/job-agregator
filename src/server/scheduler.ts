@@ -5,18 +5,18 @@
  * Vit dans le process serveur long — maintenu vivant par le service systemd
  * `--user` (cf. `npm run autostart:install`). Il NE duplique PAS la logique de
  * lancement : il réutilise le `RunManager` via `triggerRun` (verrou partagé →
- * jamais deux runs concurrents). En fin de run planifié, il envoie une
- * notification bureau avec le nombre de nouvelles offres.
+ * jamais deux runs concurrents). En fin de run, une notification bureau annonce
+ * le bilan (offres trouvées / nouvelles) via `notifyRunComplete` — le même helper
+ * sert aussi aux runs manuels (POST /api/run), donc TOUS les runs notifient.
  *
  * Cycle de vie (singleton) : `start()` au boot, `reload()` après un
  * PUT /api/settings, `stop()` à l'arrêt du serveur.
  */
-import type { RunEvent } from "../shared/types";
 import { getSettings } from "../settings";
 import { getLastRunAtMs } from "../store/sqlite";
 import { triggerRun } from "./routes/run";
 import { nextFireDelay, shouldCatchUp } from "../lib/cron-schedule";
-import { notifyDesktop } from "../lib/notify";
+import { notifyRunComplete } from "../lib/notify";
 import { waitForConnectivity } from "../lib/network";
 import { createLogger } from "../lib/logger";
 
@@ -82,7 +82,7 @@ class Scheduler {
       logger.warn("Rattrapage abandonné : réseau toujours indisponible après attente");
       return;
     }
-    const started = triggerRun((event) => this.onRunComplete(event));
+    const started = triggerRun(notifyRunComplete);
     if (!started) logger.warn("Rattrapage ignoré : un run est déjà en cours");
   }
 
@@ -115,7 +115,7 @@ class Scheduler {
   /** Déclenche un run via le RunManager partagé, puis réarme. */
   private fire(): void {
     this.timer = null;
-    const started = triggerRun((event) => this.onRunComplete(event));
+    const started = triggerRun(notifyRunComplete);
     if (started) {
       logger.info("Run planifié déclenché");
     } else {
@@ -124,17 +124,6 @@ class Scheduler {
     }
     // Réarme pour le créneau suivant, qu'on ait déclenché ou non.
     this.arm();
-  }
-
-  /** Notification bureau de fin de run planifié (best-effort). */
-  private onRunComplete(event: RunEvent): void {
-    if (event.type === "error") {
-      notifyDesktop("job-agregator — run en échec", event.message ?? "Erreur inconnue.");
-      return;
-    }
-    const n = event.newOffers ?? 0;
-    const body = n === 0 ? "Aucune nouvelle offre." : `${n} nouvelle${n > 1 ? "s" : ""} offre${n > 1 ? "s" : ""}.`;
-    notifyDesktop("job-agregator — recherche terminée", body);
   }
 }
 

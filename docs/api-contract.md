@@ -122,10 +122,15 @@ Réponse `200` : `Settings`
 - `cronEnabled` : booléen. Quand vrai, le scheduler in-process déclenche un run à
   chaque horaire de `cronTimes` (défaut `false`).
 - `cronTimes` : horaires quotidiens `"HH:MM"` (heure locale, `00:00`→`23:59`),
-  défaut `["08:00", "20:00"]`. À chaque horaire, un run est lancé puis une
-  notification bureau annonce le nombre de nouvelles offres. Au démarrage du
+  défaut `["08:00", "20:00"]`. À chaque horaire, un run est lancé. Au démarrage du
   serveur, si un créneau a été manqué (PC éteint), un run de rattrapage est
   déclenché une fois.
+
+**Notification bureau de fin de run** : à la fin de **tout** run — planifié (cron)
+comme manuel (`POST /api/run`) — une notification bureau (`notify-send`/libnotify,
+best-effort) annonce le bilan : succès « X offres trouvées · Y nouvelles », ou le
+message d'erreur en cas d'échec. Aucune notif n'élève d'erreur (binaire absent /
+session sans `DISPLAY` → WARN loggé, run inchangé).
 
 ### PUT /api/settings
 

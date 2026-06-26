@@ -25,6 +25,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RunEvent } from "../../shared/types";
+import { notifyRunComplete } from "../../lib/notify";
 
 /** Préfixe des lignes de progression émises par l'orchestrateur sur stdout. */
 const RUN_PREFIX = "@@RUN ";
@@ -307,9 +308,11 @@ export function triggerRun(onComplete?: (event: RunEvent) => void): boolean {
 }
 
 export async function registerRunRoutes(app: FastifyInstance): Promise<void> {
-  // Déclenche un run (202) ou refuse si un run est déjà en cours (423).
+  // Déclenche un run (202) ou refuse si un run est déjà en cours (423). On passe
+  // `notifyRunComplete` pour que les runs MANUELS notifient le bureau comme les
+  // runs planifiés (cf. scheduler) — un seul callback par run (verrou unique).
   app.post("/api/run", async (_request, reply) => {
-    if (!manager.start()) {
+    if (!manager.start(notifyRunComplete)) {
       return reply.code(423).send({ ok: false, error: "run already in progress" });
     }
     return reply.code(202).send({ ok: true });
