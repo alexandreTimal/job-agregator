@@ -81,6 +81,39 @@ export interface Settings {
   cronTimes: string[];
 }
 
+/**
+ * Les 9 critères de recherche/filtrage qu'un PROFIL capture (tout `Settings`
+ * SAUF `cronEnabled`/`cronTimes`, qui restent globaux car la planification est
+ * système, pas un angle de recherche). Voir `SearchProfile`.
+ */
+export type ProfileCriteria = Omit<Settings, "cronEnabled" | "cronTimes">;
+
+/**
+ * Un profil de recherche nommé : un angle d'écoute complet (mots-clés ET
+ * filtres). Un seul profil est actif à la fois ; chaque run utilise les critères
+ * du profil actif. `getSettings()` fusionne ces critères avec le cron global et
+ * rend toujours la forme `Settings` plate — le pipeline reste donc intact.
+ *
+ * - `id`   : identifiant stable (jamais ré-affecté ; sert de clé d'activation).
+ * - `name` : libellé éditable affiché dans le sélecteur de l'UI.
+ */
+export interface SearchProfile extends ProfileCriteria {
+  id: string;
+  name: string;
+}
+
+/** Vue allégée d'un profil pour le sélecteur (sans les critères). */
+export interface SearchProfileMeta {
+  id: string;
+  name: string;
+}
+
+/** Réponse de GET /api/profiles : la liste des profils + lequel est actif. */
+export interface ProfilesState {
+  activeProfileId: string;
+  profiles: SearchProfileMeta[];
+}
+
 /** Comptage d'offres par source, avec le chemin du logo local. */
 export interface SourceCount {
   source: string;

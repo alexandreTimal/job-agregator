@@ -13,7 +13,7 @@ synchronisée ici ET dans `src/shared/types.ts`.
 
 Voir `src/shared/types.ts` pour les définitions canoniques :
 `Offer`, `OfferFilter` (`"all" | "liked" | "applied"`), `OfferSort` (`"recent" | "score"`),
-`Settings`, `SourceCount`, `Run`, `Stats`, `RunEvent`,
+`Settings`, `SearchProfile`, `SearchProfileMeta`, `ProfilesState`, `SourceCount`, `Run`, `Stats`, `RunEvent`,
 `CandidatureStatus` (`"none" | "queued" | "generating" | "ready" | "failed"`),
 `CandidatureState`, `CandidatureEvent`.
 
@@ -79,7 +79,9 @@ n'est jamais re-proposée.
 
 ### GET /api/settings
 
-Lit la configuration effective (table sqlite `settings`).
+Lit la configuration effective (table sqlite `settings`) : le cron global FUSIONNÉ avec
+les 9 critères du **profil de recherche actif** (cf. section « Profils »). La forme
+`Settings` reste inchangée ; l'orchestrateur et le filtre n'ont aucune notion de profil.
 
 Réponse `200` : `Settings`
 
@@ -144,6 +146,61 @@ Remplace la configuration effective.
   rend le corps invalide. Après écriture, le scheduler est rechargé.
 - Réponse `200` : `{ "ok": true }`.
 - `400` si le corps est mal formé.
+- Les 9 critères (`terms`…`titleBlacklist`) sont écrits dans le **profil actif** ;
+  `cronEnabled`/`cronTimes` dans les clés globales. Les autres profils sont intacts.
+
+## Profils de recherche
+
+Un **profil** capture les 9 critères de recherche/filtrage (tout `Settings` SAUF
+`cronEnabled`/`cronTimes`, qui restent globaux). Un seul profil est **actif** ; chaque run
+et `GET/PUT /api/settings` opèrent sur le profil actif. Les profils vivent dans la table
+clé/valeur `settings` (clés `searchProfiles` + `activeProfileId`) — aucune table SQL dédiée.
+Toujours ≥ 1 profil ; une base antérieure est migrée paresseusement vers un profil
+« Par défaut » construit depuis les critères existants.
+
+Types : `SearchProfile` (`id`, `name` + les 9 critères), `SearchProfileMeta` (`{id, name}`),
+`ProfilesState` (`{ activeProfileId, profiles: SearchProfileMeta[] }`).
+
+### GET /api/profiles
+
+Réponse `200` : `ProfilesState`
+
+```json
+{ "activeProfileId": "default",
+  "profiles": [ { "id": "default", "name": "Par défaut" }, { "id": "p1", "name": "Stage ML" } ] }
+```
+
+### POST /api/profiles
+
+Crée un profil dont les critères **clonent le profil actif** (point de départ). Ne l'active
+PAS.
+
+- Corps : `{ "name": string }` (non vide après trim).
+- Réponse `200` : `SearchProfileMeta` (`{ id, name }`) — l'`id` est généré (stable, jamais ré-affecté).
+- `400` si `name` absent/vide.
+
+### POST /api/profiles/:id/activate
+
+Bascule le profil actif. Sans corps. Après activation, `GET /api/settings` rend les critères
+du nouveau profil actif.
+
+- Réponse `200` : `{ "ok": true }`.
+- `404` si l'`id` n'existe pas.
+
+### PATCH /api/profiles/:id
+
+Renomme un profil.
+
+- Corps : `{ "name": string }` (non vide après trim).
+- Réponse `200` : `{ "ok": true }`.
+- `400` si `name` absent/vide ; `404` si l'`id` n'existe pas.
+
+### DELETE /api/profiles/:id
+
+Supprime un profil. Si c'est l'actif, le serveur active automatiquement un autre profil.
+
+- Sans corps. Réponse `200` : `{ "ok": true }`.
+- `404` si l'`id` n'existe pas ; `409` s'il s'agit du **dernier** profil (toujours ≥ 1).
 
 ### GET /api/stats
 

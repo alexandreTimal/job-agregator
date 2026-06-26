@@ -24,8 +24,11 @@ import {
   CalendarClock,
   Banknote,
   MapPin,
+  Layers,
+  Pencil,
+  Trash2,
 } from "lucide-react";
-import type { Settings } from "../../src/shared/types";
+import type { Settings, SearchProfileMeta } from "../../src/shared/types";
 import { apiClient } from "../lib/api-client";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -142,6 +145,16 @@ export default function Settings() {
   const [newLocation, setNewLocation] = useState("");
   /** Vrai dès qu'une modification non sauvegardée existe (évite un message trompeur au 1er chargement). */
   const [dirty, setDirty] = useState(false);
+  /** Profils de recherche connus (vue allégée) + id du profil actif. */
+  const [profiles, setProfiles] = useState<SearchProfileMeta[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<string>("");
+  /** Vrai pendant la bascule de profil (persiste + recharge les critères). */
+  const [switching, setSwitching] = useState(false);
+  /** Saisie du champ « Nouveau profil ». */
+  const [newProfileName, setNewProfileName] = useState("");
+  /** Mode renommage du profil actif (champ inline) + brouillon. */
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
   /** Pour rendre le focus au champ d'ajout après suppression d'un chip de terme. */
   const addInputRef = useRef<HTMLInputElement>(null);
   /** Idem pour le champ d'ajout de mot banni. */
@@ -149,22 +162,31 @@ export default function Settings() {
   /** Idem pour le champ d'ajout de ville. */
   const addLocationRef = useRef<HTMLInputElement>(null);
 
-  /* Chargement initial de la configuration effective. */
+  /**
+   * Applique une config fraîchement chargée dans l'état local (dédup + brouillons
+   * numériques). Factorisé car réutilisé au montage, à la bascule et à la
+   * suppression de profil.
+   */
+  function applyLoadedSettings(s: Settings): void {
+    setSettings({
+      ...s,
+      terms: dedupeTerms(s.terms),
+      titleBlacklist: dedupeTerms(s.titleBlacklist ?? []),
+      atsBoards: s.atsBoards ?? {},
+    });
+    setAgeDraft(String(s.maxOfferAgeDays));
+    setSalaryDraft(String(s.salaryMin));
+  }
+
+  /* Chargement initial : configuration effective (profil actif) + liste des profils. */
   useEffect(() => {
     let cancelled = false;
-    apiClient
-      .getSettings()
-      .then((s) => {
-        if (!cancelled) {
-          setSettings({
-            ...s,
-            terms: dedupeTerms(s.terms),
-            titleBlacklist: dedupeTerms(s.titleBlacklist ?? []),
-            atsBoards: s.atsBoards ?? {},
-          });
-          setAgeDraft(String(s.maxOfferAgeDays));
-          setSalaryDraft(String(s.salaryMin));
-        }
+    Promise.all([apiClient.getSettings(), apiClient.getProfiles()])
+      .then(([s, p]) => {
+        if (cancelled) return;
+        applyLoadedSettings(s);
+        setProfiles(p.profiles);
+        setActiveProfileId(p.activeProfileId);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -349,6 +371,91 @@ export default function Settings() {
     }
   }
 
+  const activeProfileName =
+    profiles.find((p) => p.id === activeProfileId)?.name ?? "";
+
+  /**
+   * Bascule le profil actif. Les critères édités appartiennent au profil COURANT :
+   * on persiste d'abord les modifications non enregistrées (sinon on les perdrait),
+   * puis on active le profil cible et on recharge SES critères.
+   */
+  async function switchProfile(id: string): Promise<void> {
+    if (switching || id === activeProfileId || !settings) return;
+    setSwitching(true);
+    try {
+      if (dirty) await apiClient.setSettings(settings);
+      await apiClient.activateProfile(id);
+      // Le serveur a basculé : on reflète l'actif TOUT DE SUITE, pour ne pas
+      // risquer d'éditer/sauver ensuite dans le mauvais profil si le rechargement
+      // des critères échoue derrière.
+      setActiveProfileId(id);
+      const s = await apiClient.getSettings();
+      applyLoadedSettings(s);
+      setDirty(false);
+      setSaveState("idle");
+    } catch {
+      setSaveState("error");
+      // Resynchronise l'actif affiché avec la vérité serveur (best-effort).
+      try {
+        const p = await apiClient.getProfiles();
+        setProfiles(p.profiles);
+        setActiveProfileId(p.activeProfileId);
+      } catch {
+        /* garde l'état courant */
+      }
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  async function createProfile(): Promise<void> {
+    const name = newProfileName.trim();
+    if (!name || switching || !settings) return;
+    try {
+      // Le clone serveur part du profil actif EN BASE : on persiste d'abord les
+      // éditions à l'écran pour que le nouveau profil reprenne ce que l'on voit.
+      if (dirty) {
+        await apiClient.setSettings(settings);
+        setDirty(false);
+      }
+      const meta = await apiClient.createProfile(name);
+      setProfiles((ps) => [...ps, meta]);
+      setNewProfileName("");
+    } catch {
+      setSaveState("error");
+    }
+  }
+
+  async function renameActiveProfile(): Promise<void> {
+    const name = renameDraft.trim();
+    if (!name || !activeProfileId || switching) return;
+    try {
+      await apiClient.renameProfile(activeProfileId, name);
+      setProfiles((ps) => ps.map((p) => (p.id === activeProfileId ? { ...p, name } : p)));
+      setRenaming(false);
+    } catch {
+      setSaveState("error");
+    }
+  }
+
+  /** Supprime le profil actif ; le serveur choisit le nouvel actif, qu'on recharge. */
+  async function deleteActiveProfile(): Promise<void> {
+    if (profiles.length <= 1 || !activeProfileId || switching) return;
+    try {
+      await apiClient.deleteProfile(activeProfileId);
+      // `getProfiles` d'abord (vérité serveur sur le nouvel actif), puis ses critères.
+      const p = await apiClient.getProfiles();
+      setProfiles(p.profiles);
+      setActiveProfileId(p.activeProfileId);
+      const s = await apiClient.getSettings();
+      applyLoadedSettings(s);
+      setDirty(false);
+      setSaveState("idle");
+    } catch {
+      setSaveState("error");
+    }
+  }
+
   if (loadError) {
     return (
       <section aria-label="Paramètres">
@@ -378,6 +485,114 @@ export default function Settings() {
 
   return (
     <section aria-label="Paramètres" className="flex flex-col gap-6 pb-24">
+      {/* --- Profil de recherche -------------------------------------- */}
+      <Card className="animate-rise p-6">
+        <SectionTitle
+          id="settings-profile-heading"
+          icon={<Layers />}
+          title="Profil de recherche"
+          hint="Chaque profil garde son propre jeu de critères (mots-clés, filtres, sources, lieux). Le profil actif est celui qu'utilise chaque run. La planification reste commune à tous les profils."
+        />
+
+        <div role="group" aria-labelledby="settings-profile-heading" className="flex flex-col gap-4">
+          {/* Sélecteur du profil actif. */}
+          <div className="flex flex-wrap items-center gap-3">
+            <ProfileSelector
+              profiles={profiles}
+              activeId={activeProfileId}
+              disabled={switching}
+              onActivate={(id) => void switchProfile(id)}
+            />
+            <span role="status" aria-live="polite" className="text-[0.8rem] text-[var(--color-ink-mute)]">
+              {switching ? "Bascule du profil…" : null}
+            </span>
+          </div>
+
+          {/* Renommer / supprimer le profil actif. */}
+          {renaming ? (
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void renameActiveProfile();
+              }}
+            >
+              <Input
+                type="text"
+                autoFocus
+                aria-label={`Nouveau nom du profil « ${activeProfileName} »`}
+                value={renameDraft}
+                placeholder={activeProfileName}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                className="flex-1"
+              />
+              <Button type="submit" variant="signal" size="sm" disabled={!renameDraft.trim()}>
+                <Check aria-hidden="true" className="size-4" />
+                Renommer
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setRenaming(false)}>
+                Annuler
+              </Button>
+            </form>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setRenameDraft(activeProfileName);
+                  setRenaming(true);
+                }}
+                disabled={switching || !activeProfileId}
+              >
+                <Pencil aria-hidden="true" className="size-4" />
+                Renommer
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                onClick={() => void deleteActiveProfile()}
+                disabled={switching || profiles.length <= 1}
+                title={
+                  profiles.length <= 1 ? "Impossible de supprimer le dernier profil." : undefined
+                }
+              >
+                <Trash2 aria-hidden="true" className="size-4" />
+                Supprimer
+              </Button>
+            </div>
+          )}
+
+          {/* Créer un profil (clone des critères du profil actif). */}
+          <form
+            className="flex gap-2 border-t border-[var(--color-line)] pt-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void createProfile();
+            }}
+          >
+            <Input
+              type="text"
+              aria-label="Nom du nouveau profil"
+              value={newProfileName}
+              placeholder="ex. Stage ML"
+              onChange={(e) => setNewProfileName(e.target.value)}
+              className="flex-1"
+            />
+            <Button type="submit" variant="signal" disabled={!newProfileName.trim() || switching}>
+              <Plus aria-hidden="true" className="size-4" />
+              Nouveau profil
+            </Button>
+          </form>
+          <p className="text-[0.8rem] text-[var(--color-ink-mute)]">
+            Un nouveau profil reprend les critères du profil actif comme point de départ ;
+            activez-le pour l'éditer.
+          </p>
+        </div>
+      </Card>
+
       {/* --- Termes de recherche -------------------------------------- */}
       <Card className="animate-rise p-6">
         <SectionTitle
@@ -807,6 +1022,81 @@ export default function Settings() {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Sélecteur du profil actif (choix exclusif). Sémantique `radiogroup`/`radio`
+ * avec roving tabindex, mais — contrairement à `Segmented` — la **sélection ne
+ * suit PAS le focus** : les flèches déplacent seulement le focus, l'activation
+ * (coûteuse : POST + rechargement serveur) ne se fait qu'au clic ou via
+ * Entrée/Espace. Cela évite d'activer chaque profil traversé au clavier.
+ */
+function ProfileSelector({
+  profiles,
+  activeId,
+  disabled,
+  onActivate,
+}: {
+  profiles: SearchProfileMeta[];
+  activeId: string;
+  disabled: boolean;
+  onActivate: (id: string) => void;
+}) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  function onKeyDown(e: React.KeyboardEvent, index: number): void {
+    let next = index;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % profiles.length;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
+      next = (index - 1 + profiles.length) % profiles.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = profiles.length - 1;
+    else if (e.key === "Enter" || e.key === " ") {
+      // Active le profil FOCUS (la sélection ne suit pas le focus).
+      e.preventDefault();
+      const opt = profiles[index];
+      if (opt) onActivate(opt.id);
+      return;
+    } else return;
+    e.preventDefault();
+    refs.current[next]?.focus();
+  }
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Profil actif"
+      className="inline-flex flex-wrap items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-line)] bg-black/30 p-1"
+    >
+      {profiles.map((p, index) => {
+        const active = p.id === activeId;
+        return (
+          <button
+            key={p.id}
+            ref={(el) => {
+              refs.current[index] = el;
+            }}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            tabIndex={active ? 0 : -1}
+            disabled={disabled}
+            onClick={() => onActivate(p.id)}
+            onKeyDown={(e) => onKeyDown(e, index)}
+            className={cn(
+              "inline-flex items-center rounded-[var(--radius-xs)] px-3 py-1.5 text-xs font-medium " +
+                "transition-all duration-200 ease-[var(--ease-out-expo)] disabled:opacity-60",
+              active
+                ? "bg-[var(--color-signal)]/12 text-[var(--color-signal)] shadow-[inset_0_0_0_1px_#c8f24c40]"
+                : "text-[var(--color-ink-mute)] hover:text-[var(--color-ink)]",
+            )}
+          >
+            {p.name}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

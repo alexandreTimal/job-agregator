@@ -11,6 +11,9 @@
  *   POST   /api/offers/:id/delete
  *   GET    /api/settings
  *   PUT    /api/settings
+ *   GET    /api/profiles
+ *   POST   /api/profiles            (création) ; POST /api/profiles/:id/activate
+ *   PATCH  /api/profiles/:id        (renommage) ; DELETE /api/profiles/:id
  *   GET    /api/stats
  *   POST   /api/run            (202 / 423)
  *   GET    /api/run/stream     (SSE)
@@ -18,6 +21,7 @@
 import type { FastifyInstance } from "fastify";
 import { registerOffersRoutes } from "./offers";
 import { registerSettingsRoutes } from "./settings";
+import { registerProfilesRoutes } from "./profiles";
 import { registerStatsRoutes } from "./stats";
 import { registerRunRoutes } from "./run";
 import { registerCandidatureRoutes } from "./candidature";
@@ -28,6 +32,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
   await registerOffersRoutes(app);
   await registerSettingsRoutes(app);
+  await registerProfilesRoutes(app);
   await registerStatsRoutes(app);
   await registerRunRoutes(app);
   await registerCandidatureRoutes(app);

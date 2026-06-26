@@ -13,8 +13,10 @@ import type {
   Offer,
   OfferFilter,
   OfferSort,
+  ProfilesState,
   Run,
   RunEvent,
+  SearchProfileMeta,
   Settings,
   Stats,
 } from "../../src/shared/types";
@@ -86,8 +88,17 @@ const MOCK_SETTINGS: Settings = {
   locations: ["Paris", "Lyon"],
   remoteOk: true,
   maxOfferAgeDays: 7,
+  titleBlacklist: ["sales"],
   cronEnabled: false,
   cronTimes: ["08:00", "20:00"],
+};
+
+const MOCK_PROFILES: ProfilesState = {
+  activeProfileId: "default",
+  profiles: [
+    { id: "default", name: "Par défaut" },
+    { id: "p1", name: "Stage ML" },
+  ],
 };
 
 const MOCK_RUNS: Run[] = [
@@ -186,6 +197,48 @@ export const apiClient = {
       method: "PUT",
       body: JSON.stringify(settings),
     });
+  },
+
+  /* ---------------------------------------------------------------- */
+  /* Profils de recherche (les critères vivent dans le profil actif)   */
+  /* ---------------------------------------------------------------- */
+
+  /** Liste les profils + l'id du profil actif. */
+  async getProfiles(): Promise<ProfilesState> {
+    if (USE_MOCK) return Promise.resolve({ ...MOCK_PROFILES });
+    return http<ProfilesState>(`/api/profiles`);
+  },
+
+  /** Crée un profil (clone des critères du profil actif). Ne l'active pas. */
+  async createProfile(name: string): Promise<SearchProfileMeta> {
+    if (USE_MOCK) return Promise.resolve({ id: "p-mock", name });
+    return http<SearchProfileMeta>(`/api/profiles`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  /** Renomme un profil. */
+  async renameProfile(id: string, name: string): Promise<{ ok: true }> {
+    if (USE_MOCK) return Promise.resolve({ ok: true });
+    return http<{ ok: true }>(`/api/profiles/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+  },
+
+  /** Active un profil ; l'appelant re-`getSettings()` ensuite pour rafraîchir. */
+  async activateProfile(id: string): Promise<{ ok: true }> {
+    if (USE_MOCK) return Promise.resolve({ ok: true });
+    // Sans corps : `http()` n'ajoute alors PAS de Content-Type (sinon Fastify
+    // rejette le body vide, cf. note en tête de fichier).
+    return http<{ ok: true }>(`/api/profiles/${id}/activate`, { method: "POST" });
+  },
+
+  /** Supprime un profil (impossible si c'est le dernier → HTTP 409). */
+  async deleteProfile(id: string): Promise<{ ok: true }> {
+    if (USE_MOCK) return Promise.resolve({ ok: true });
+    return http<{ ok: true }>(`/api/profiles/${id}`, { method: "DELETE" });
   },
 
   async getStats(): Promise<Stats> {
