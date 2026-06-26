@@ -310,6 +310,13 @@ ré-ajouter sans demande explicite.
 masquées, texte porteur en `ink-faint`, fichiers `.css` par composant (tout est
 Tailwind + tokens).
 
+### Workflow Git (préférence du mainteneur)
+
+- Projet **mono-utilisateur, local** : on travaille **directement sur `main`**.
+  **Pas de branche de feature, pas de pull request.** Quand un changement est prêt
+  et vérifié, `commit` **puis `push` sur `main` en direct** (override assumé de la
+  règle générale « branche d'abord sur la branche par défaut »).
+
 ### Secrets & config
 
 - Aucun secret en clair dans le repo. Tout passe par `.env` (gitignored).
